@@ -5,27 +5,27 @@
 # Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4) with 0000 (Commons.Color)
 # applied: only the context of the picker's size properties differs from
 # upstream main.
-diff --git i/shell/plugins/background/Background.qml w/shell/plugins/background/Background.qml
-index 0a53b20..546aaaf 100644
---- i/shell/plugins/background/Background.qml
-+++ w/shell/plugins/background/Background.qml
-@@ -105,6 +105,15 @@ Item {
+# 2026-11-06: style menu summons appearance via shell IPC now, picker responsive sizes — regenerated against Omarchy 4.5.0-3, same
+# semantic change (the previous revision carries the 4.4-era hunks).
+
+
+--- a/shell/plugins/background/Background.qml
++++ b/shell/plugins/background/Background.qml
+@@ -218,6 +218,13 @@
      if (!bgSwitchProc.running) bgSwitchProc.running = true
    }
  
 +  function openStyleMenu() {
-+    if (!styleMenuProc.running) styleMenuProc.running = true
-+  }
++    var payload = JSON.stringify({ menu: "appearance" })
 +
-+  Process {
-+    id: styleMenuProc
-+    command: ["omarchy-menu", "summon", "style"]
++    if (!root.shell || !root.shell.summon("omarchy.menu", payload))
++      Util.execArgv(["omarchy-shell", "shell", "summon", "omarchy.menu", payload])
 +  }
 +
    function openThemeSwitcher() {
-     if (!themeSwitchProc.running) themeSwitchProc.running = true
-   }
-@@ -313,6 +322,10 @@ Item {
+     var payload = JSON.stringify({ source: "themes" })
+ 
+@@ -521,6 +528,10 @@
        MouseArea {
          anchors.fill: parent
          acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -36,12 +36,10 @@ index 0a53b20..546aaaf 100644
          onDoubleClicked: function(mouse) {
            if (mouse.button === Qt.RightButton) root.openThemeSwitcher()
            else root.openSelector()
-diff --git i/shell/plugins/image-picker/ImagePicker.qml w/shell/plugins/image-picker/ImagePicker.qml
-index b0554f5..0f735f6 100644
---- i/shell/plugins/image-picker/ImagePicker.qml
-+++ w/shell/plugins/image-picker/ImagePicker.qml
-@@ -39,10 +39,11 @@ Item {
-   property color scrim: Commons.Color.imagePicker.scrim
+--- a/shell/plugins/image-picker/ImagePicker.qml
++++ b/shell/plugins/image-picker/ImagePicker.qml
+@@ -55,10 +55,11 @@
+   property color foreground: Commons.Color.imagePicker.text
    property color selectedBorder: Commons.Color.imagePicker.selectedBorder
    property color unselectedBorder: Commons.Color.imagePicker.unselectedBorder
 -  property int expandedWidth: 768
@@ -55,7 +53,7 @@ index b0554f5..0f735f6 100644
    property int sliceSpacing: -30
    property int skewOffset: 28
    property int bottomChromeHeight: showLabels ? (filterable ? 104 : 74) : (filterable ? 60 : 30)
-@@ -435,6 +436,18 @@ Item {
+@@ -728,6 +729,18 @@
  
            Component.onCompleted: forceActiveFocus()
  
@@ -72,5 +70,5 @@ index b0554f5..0f735f6 100644
 +          }
 +
            Repeater {
-             model: root.imageArray.length
- 
+             id: imageCards
+             model: visibleImages

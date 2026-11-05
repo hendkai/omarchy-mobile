@@ -7,11 +7,12 @@
 # files as tag v4.0.4) with 0000 (Commons.Color) applied. 4.0.4 has no
 # "Fingerprint reader unavailable" notice, so the hunk that moved it above
 # the field is gone and the hint shows whenever fingerprints are set up.
-diff --git i/shell/plugins/lock/Keypad.qml w/shell/plugins/lock/Keypad.qml
-new file mode 100644
-index 0000000..98ad1ad
+# 2026-11-06: lock keypad: i18n placeholder via fallback arg, keypad-aware idleMs — regenerated against Omarchy 4.5.0-3, same
+# semantic change (the previous revision carries the 4.4-era hunks).
+
+
 --- /dev/null
-+++ w/shell/plugins/lock/Keypad.qml
++++ b/shell/plugins/lock/Keypad.qml
 @@ -0,0 +1,73 @@
 +import QtQuick
 +import qs.Commons
@@ -86,11 +87,9 @@ index 0000000..98ad1ad
 +    }
 +  }
 +}
-diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
-index 3c5f65d..53eef73 100644
---- i/shell/plugins/lock/LockView.qml
-+++ w/shell/plugins/lock/LockView.qml
-@@ -17,8 +17,16 @@ Item {
+--- a/shell/plugins/lock/LockView.qml
++++ b/shell/plugins/lock/LockView.qml
+@@ -19,8 +19,16 @@
    property bool loadBackground: true
    property string passwordText: ""
    property bool syncingPasswordText: false
@@ -103,13 +102,13 @@ index 3c5f65d..53eef73 100644
 +  readonly property bool keypadClearsSensor: keypad && fingerprintConfigured
 +  readonly property int keypadBottomMargin: Math.round(height * (keypadClearsSensor ? 0.34 : 0.08))
  
--  readonly property string placeholderText: "Enter Password"
-+  readonly property string placeholderText: keypad ? "Enter PIN" : "Enter Password"
+-  readonly property string placeholderText: Commons.I18n.t("lock.enterPassword")
++  readonly property string placeholderText: keypad ? Commons.I18n.t("lock.enterPin", "Enter PIN") : Commons.I18n.t("lock.enterPassword")
    readonly property int fieldWidth: 381
    readonly property int fieldHeight: 67
    readonly property int outlineThickness: 3
-@@ -54,7 +62,8 @@ Item {
-   }
+@@ -50,7 +58,8 @@
+   signal wakeRequested()
  
    function forcePasswordFocus() {
 -    passwordInput.forceActiveFocus()
@@ -118,7 +117,7 @@ index 3c5f65d..53eef73 100644
    }
  
    function clearPassword() {
-@@ -115,16 +124,58 @@ Item {
+@@ -134,16 +143,58 @@
  
      MouseArea {
        anchors.fill: parent
@@ -179,7 +178,7 @@ index 3c5f65d..53eef73 100644
        color: Commons.Color.lock.background
        borderSpec: root.inputBorderSpec
        radius: Style.cornerRadius
-@@ -141,7 +192,7 @@ Item {
+@@ -160,7 +211,7 @@
          anchors.leftMargin: inputField.borderLeft + 18 + root.fingerprintReserve
          verticalAlignment: TextInput.AlignVCenter
          horizontalAlignment: TextInput.AlignHCenter
@@ -188,9 +187,9 @@ index 3c5f65d..53eef73 100644
          clip: true
          enabled: root.inputEnabled && !root.authenticatingPassword
          readOnly: root.authenticatingPassword
-@@ -216,5 +267,23 @@ Item {
-         verticalAlignment: Text.AlignVCenter
-       }
+@@ -260,5 +311,23 @@
+       font.italic: true
+       horizontalAlignment: Text.AlignHCenter
      }
 +
 +    // Touch-only devices with fingerprints: say that either unlocks.
@@ -203,7 +202,7 @@ index 3c5f65d..53eef73 100644
 +      anchors.horizontalCenter: inputField.horizontalCenter
 +      width: parent.width - Style.space(32)
 +      visible: root.keypadClearsSensor
-+      text: "Touch the fingerprint sensor or enter your PIN"
++      text: Commons.I18n.t("lock.keypadFingerprintHint", "Touch the fingerprint sensor or enter your PIN")
 +      color: Commons.Color.lock.text
 +      font.family: Style.font.family
 +      font.pixelSize: Style.font.subtitle
@@ -212,67 +211,31 @@ index 3c5f65d..53eef73 100644
 +    }
    }
  }
-diff --git i/shell/plugins/lock/Service.qml w/shell/plugins/lock/Service.qml
-index 65fcb19..95726eb 100644
---- i/shell/plugins/lock/Service.qml
-+++ w/shell/plugins/lock/Service.qml
-@@ -23,6 +23,7 @@ Item {
+--- a/shell/plugins/lock/Service.qml
++++ b/shell/plugins/lock/Service.qml
+@@ -24,6 +24,7 @@
    property bool fingerprintAuthenticating: false
    property bool passwordPamConfigured: false
    property bool fingerprintConfigured: false
 +  property bool keypad: false
-   property bool previewVisible: false
-   property string enteredPassword: ""
-   property string pendingPassword: ""
-@@ -127,6 +128,7 @@ Item {
-   }
- 
-   function beginLock() {
-+    keypadToggle.reload()
-     if (!passwordPamConfigured) {
-       logEvent("lock-denied: missing-pam")
-       return false
-@@ -267,6 +269,7 @@ Item {
-       color: Commons.Color.background
- 
-       LockView {
-+        keypad: root.keypad
-         id: lockView
-         anchors.fill: parent
-         backgroundPath: root.backgroundPath
-@@ -298,6 +301,7 @@ Item {
+   property int fingerprintUnreachedStreak: 0
+   property bool fingerprintAttemptReachedDevice: false
+   property bool fingerprintAttemptFastError: false
+@@ -543,6 +544,7 @@
      exclusionMode: ExclusionMode.Ignore
  
      LockView {
 +      keypad: root.keypad
        anchors.fill: parent
        backgroundPath: root.backgroundPath
-       backgroundVersion: root.backgroundVersion
-@@ -414,7 +418,8 @@ Item {
+       videoPosterPath: root.videoPosterPath
+@@ -766,7 +768,8 @@
  
    Timer {
      id: idleBlankTimer
--    interval: 5000
+-    readonly property int idleMs: 5000
 +    // Touch-only devices (the number pad) get longer to find and use it.
-+    interval: root.keypad ? 10000 : 5000
-     repeat: false
-     property double armedAt: 0
-     onTriggered: {
-@@ -482,6 +487,17 @@ Item {
-     else armBlankTimer()
-   }
- 
-+  // Touch-only devices opt into the number pad: omarchy-toggle lock-keypad.
-+  FileView {
-+    id: keypadToggle
-+    path: root.stateHome + "/omarchy/toggles/lock-keypad"
-+    watchChanges: true
-+    printErrors: false
-+    onLoaded: root.keypad = true
-+    onLoadFailed: root.keypad = false
-+    onFileChanged: reload()
-+  }
-+
-   FileView {
-     path: "/etc/pam.d/omarchy-lock-password"
-     watchChanges: true
++    readonly property int idleMs: root.keypad ? 10000 : 5000
+     // A resume reaches this as soon as the kernel thaws, seconds before the
+     // panel lights (on NVIDIA it waits out a VT switch and a modeset), so the
+     // idle run-up blanked the lock just as it appeared.
