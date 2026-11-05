@@ -895,7 +895,7 @@ def lock_fingerprint_probe(t, root):
     ok(unknown and "fingerprintConfigured =" not in unknown and "if (fingerprintConfigured) return" in unknown,
        "real omarchy: an unknown probe never turns fingerprint off (879d6583d)")
     ok("interval: FingerprintModel.MATCH_RETRY_MS" in service.split("id: fingerprintRetryTimer", 1)[1].split("}", 1)[0]
-       and "MATCH_RETRY_MS = 250" in read(root, lock + "FingerprintModel.js"),
+       and "MATCH_RETRY_MS = 250" in (read(root, lock + "FingerprintModel.js") or ""),
        "real omarchy: a mismatch retry starts at the model's 250 ms pace (879d6583d)")
 
     d = os.path.join(t, "fp-probe")
