@@ -13,10 +13,13 @@
 # omamobile-osk-guard is the safety net behind it.
 #
 # Against Omarchy 4.0.6 (stable 4.0.6-1).
-diff --git i/bin/omarchy-launch-screensaver w/bin/omarchy-launch-screensaver
---- i/bin/omarchy-launch-screensaver
-+++ w/bin/omarchy-launch-screensaver
-@@ -15,6 +15,32 @@
+# 2026-11-06: screensaver semantics unchanged, mouse-report printf now sits beside the new stty line — regenerated against Omarchy 4.5.0-3, same
+# semantic change (the previous revision carries the 4.4-era hunks).
+
+
+--- a/bin/omarchy-launch-screensaver
++++ b/bin/omarchy-launch-screensaver
+@@ -11,6 +11,32 @@
  fi
  
  focused=$(omarchy-hyprland-monitor-focused)
@@ -49,7 +52,7 @@ diff --git i/bin/omarchy-launch-screensaver w/bin/omarchy-launch-screensaver
  terminal=$(xdg-terminal-exec --print-id)
  
  case $terminal in
-@@ -64,7 +90,10 @@
+@@ -63,7 +89,10 @@
      hypr_exec ghostty --class=org.omarchy.screensaver --config-file="$OMARCHY_PATH/default/ghostty/screensaver" --font-size=18 -e omarchy-screensaver
      ;;
    *foot*)
@@ -61,13 +64,13 @@ diff --git i/bin/omarchy-launch-screensaver w/bin/omarchy-launch-screensaver
      ;;
    *kitty*)
      hypr_exec kitty --class=org.omarchy.screensaver --override font_size=18 --override window_padding_width=0 -e omarchy-screensaver
-diff --git i/bin/omarchy-screensaver w/bin/omarchy-screensaver
---- i/bin/omarchy-screensaver
-+++ w/bin/omarchy-screensaver
-@@ -6,8 +6,34 @@
+--- a/bin/omarchy-screensaver
++++ b/bin/omarchy-screensaver
+@@ -6,8 +6,35 @@
    hyprctl activewindow -j | jq -e '.class == "org.omarchy.screensaver"' >/dev/null 2>&1
  }
  
++
 +# Put the cursor back the way it was: a touch device keeps it hidden.
 +cursor_was_invisible=$(hyprctl getoption cursor:invisible -j 2>/dev/null | jq -r '.bool // (.int == 1)' 2>/dev/null)
 +
@@ -100,20 +103,21 @@ diff --git i/bin/omarchy-screensaver w/bin/omarchy-screensaver
    pkill -x ttfx 2>/dev/null
    pkill -f '[o]rg.omarchy.screensaver' 2>/dev/null
    exit 0
-@@ -17,6 +43,9 @@
+@@ -17,6 +44,9 @@
  trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
  
  printf '\033]11;rgb:00/00/00\007'  # Set background color to black
 +# Report mouse clicks (and touches) as input, so a tap ends the screensaver
 +# like a key press does. Turned back off on exit.
 +printf '\033[?1000h'
+ stty -echo 2>/dev/null  # Don't echo the key that stops the screensaver into the corner
  
  hyprctl eval 'hl.config({ cursor = { invisible = true } })' &>/dev/null || hyprctl keyword cursor:invisible true &>/dev/null
- 
-@@ -33,6 +62,17 @@
+@@ -34,6 +64,18 @@
    done
  }
  
++
 +# The window rule makes the screensaver fullscreen, but a surface that holds
 +# focus as it opens (e.g. a launcher being dismissed) can leave it a plain
 +# floating window. Make sure, before measuring the terminal.
@@ -128,7 +132,7 @@ diff --git i/bin/omarchy-screensaver w/bin/omarchy-screensaver
  wait_for_terminal_resize
  
  while true; do
-@@ -41,7 +81,26 @@
+@@ -42,7 +84,26 @@
      --random-effect --no-eol --no-restore-cursor &
  
    while pgrep -t "${tty#/dev/}" -x ttfx >/dev/null; do
