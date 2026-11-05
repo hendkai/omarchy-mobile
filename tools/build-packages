@@ -255,11 +255,27 @@ sign_and_index() {
   if command -v repo-add >/dev/null; then
     (cd "$repo" && repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}")
   else
-    # Not an Arch machine: pacman's repo-add from the Arch Linux ARM image,
-    # as this user, with the same key.
-    docker run --rm --platform linux/arm64 -u "$(id -u):$(id -g)" \
-      -v "$ROOT/$repo:/repo" -v "$GNUPGHOME:/gnupg" -e GNUPGHOME=/gnupg -e HOME=/tmp -w /repo \
-      "$(alarm_base_image)" repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}"
+    # Not an Arch machine: pacman's repo-add from the Arch Linux ARM image.
+    # The keyring is copied off the bind mount: gpg-agent cannot put its
+    # socket on every bind mount (Apple virtiofs among them), and a mount
+    # that squashes ownership leaves the 0700 keyring unreadable to the
+    # container user. Runs as root and hands the repository back to the
+    # owner it arrived with (a no-op where chown is squashed).
+    docker run --rm --platform linux/arm64 \
+      -v "$ROOT/$repo:/repo" -v "$GNUPGHOME:/gnupg:ro" -w /repo \
+      "$(alarm_base_image)" bash -c '
+        owner=$(stat -c %u:%g /repo)
+        cp -a /gnupg /tmp/gnupg-home 2>/dev/null
+        rc=0
+        cd /repo
+        GNUPGHOME=/tmp/gnupg-home repo-add --quiet --sign --key '"$key"' /tmp/omamobile.db.tar.gz "$@" || rc=$?
+        if ((rc == 0)); then
+          rm -f /repo/omamobile.db* /repo/omamobile.files*
+          cp -a /tmp/omamobile.db* /tmp/omamobile.files* /repo/ 2>/dev/null || true
+          chown -R "$owner" /repo
+        fi
+        exit $rc
+      ' bash "${packages[@]}"
   fi
 }
 
@@ -316,8 +332,18 @@ for dir in "${build[@]}"; do
   have_repo=0
   [[ -f $repo/omamobile.db ]] && have_repo=1
   start=$(date +%s)
+  # Build on the Docker host's own filesystem (a named volume), not on the
+  # bind mount: Apple's virtiofs (Docker through Colima on macOS) squashes
+  # chown on bind mounts and hides a directory whose read bits makepkg strips
+  # (chmod a-srw) from the fakeroot child, and APFS is case-insensitive, so
+  # trees with case-colliding names break. The tree is staged in read-only and
+  # the finished packages staged back out, so the caller still sees $work/out.
+  vol=omamobile-build-work
+  docker volume create "$vol" >/dev/null
+  docker run --rm --platform linux/arm64 -v "$work:/stage:ro" -v "$vol:/work" \
+    "$(alarm_base_image)" bash -c 'find /work -mindepth 1 -delete && cp -a /stage/. /work/' >/dev/null
   docker run --rm --platform linux/arm64 \
-    -v "$work:/work" -v "$ROOT/$repo:/repo/aarch64:ro" \
+    -v "$vol:/work" -v "$ROOT/$repo:/repo/aarch64:ro" \
     -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" -v "$ALARM_CACHE/src:/srcdest" \
     -e NAME="$name" -e HAVE_REPO="$have_repo" -e INCHECK="$incheck" \
     "$image" bash -c '
@@ -355,6 +381,9 @@ for dir in "${build[@]}"; do
       su builder -c "SRCDEST=/srcdest PKGDEST=/work/out PKGEXT=.pkg.tar.zst makepkg ${flags[*]}" 2>&1 | tail -25
       ls /work/out/*.pkg.tar.zst >/dev/null
     ' || { rm -rf "$work"; alarm_die "$name: build failed"; }
+  docker run --rm --platform linux/arm64 -v "$vol:/work" -v "$out:/hostout" \
+    "$(alarm_base_image)" cp -a /work/out/. /hostout/ >/dev/null
+  docker volume rm "$vol" >/dev/null
   add_to_repo "$out"/*.pkg.tar.zst
   rm -rf "$work"
   echo "    built in $(( ($(date +%s) - start) / 60 )) min"
