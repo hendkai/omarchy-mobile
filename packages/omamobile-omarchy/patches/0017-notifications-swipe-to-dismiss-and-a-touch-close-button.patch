@@ -13,17 +13,21 @@
 # swiped doesn't expire under the finger. Right-click still closes.
 #
 # Against Omarchy 4.0.6 (edge 4.0.6-1) with 0015 (inline reply) applied.
+
+# 2026-11-06: rewritten into Toast.qml cards - swipe rides x offset with plate and content fade, held keeps the countdown off, touch close button beside the headline stamp. 4.5 has no hover pause so the HoverHandler device tweak has no counterpart — regenerated against Omarchy 4.5.0-3, same
+# semantic change (the previous revision carries the 4.4-era hunks).
+
 diff --git i/shell/plugins/notifications/Service.qml w/shell/plugins/notifications/Service.qml
---- i/shell/plugins/notifications/Service.qml
-+++ w/shell/plugins/notifications/Service.qml
-@@ -455,6 +455,29 @@
- 
-   Process { id: focusAppProc; running: false }
+--- a/shell/plugins/notifications/Service.qml
++++ b/shell/plugins/notifications/Service.qml
+@@ -1361,6 +1361,29 @@
+     onLoadFailed: service.loadQuiet("")
+   }
  
 +  // Whether the seat has a touch screen, asked of Hyprland once at startup.
-+  // Toasts then show a close button: a tap runs the default action, and a
-+  // finger has no right button to dismiss with. A seat with only a mouse
-+  // keeps the toasts as they were.
++  // Toasts then show a close button and take swipes: a tap runs the default
++  // action, and a finger has no right button to dismiss with. A seat with
++  // only a mouse keeps the toasts as they were.
 +  property bool touchScreen: false
 +
 +  Process {
@@ -43,50 +47,45 @@ diff --git i/shell/plugins/notifications/Service.qml w/shell/plugins/notificatio
 +    }
 +  }
 +
+   // Once at startup: the private directory and its files. Older layouts'
+   // leftovers are removed by a migration.
    Process {
-     id: ensureDirsProc
-     command: ["mkdir", "-p", service.stateDir, service.popupStateDir, service.historyDir, service.imagesDir]
-@@ -880,6 +903,7 @@
+@@ -1378,7 +1401,10 @@
+     onExited: function(code) { service.storeReady = code === 0 }
+   }
  
-   Component.onCompleted: {
-     ensureDirsProc.running = true
+-  Component.onCompleted: storePrepare.running = true
++  Component.onCompleted: {
++    storePrepare.running = true
 +    touchScreenProc.running = true
-     // Once mkdir has had a tick, load the existing settings file. FileView
-     // surfaces an empty string when the file doesn't exist; loadSettings
-     // handles that path.
-@@ -1061,7 +1085,7 @@
++  }
+   // A reload or a clean exit inside the save delay still writes.
+   Component.onDestruction: flushStore()
  
-             readonly property real lifetime: service.durationFor(cardSlot.urgency, cardSlot.expireTimeout)
-             property real remainingLifetime: 1.0
--            readonly property bool ticking: cardSlot.lifetime > 0 && !card.hovered && !cardSlot.replying
-+            readonly property bool ticking: cardSlot.lifetime > 0 && !card.held && !cardSlot.replying
- 
-             // Inline reply. The placeholder is looked up again whenever the
-             // row's content changes, as an update can add or drop the action.
-@@ -1115,6 +1139,7 @@
- 
-               replyPlaceholder: cardSlot.replyPlaceholder
-               replying: cardSlot.replying
+@@ -1689,6 +1715,7 @@
+               selected: service.keyboardMode && service.keyboardKey === model.key
+               actions: service.actionsOf(model.key, service.refsRevision)
+               replyPlaceholder: service.replyPlaceholderFor(model.key, service.refsRevision)
 +              closeButtonShown: service.touchScreen
+               hoverX: service.hoverX
+               hoverY: service.hoverY
+               // A click is the mouse taking over: it ends keyboard mode, which
+diff --git i/shell/plugins/notifications/Toast.qml w/shell/plugins/notifications/Toast.qml
+--- a/shell/plugins/notifications/Toast.qml
++++ b/shell/plugins/notifications/Toast.qml
+@@ -103,6 +103,23 @@
+   }
+   Component.onDestruction: if (replying && scene) scene.openReplies -= 1
  
-               onCloseRequested: service.dismissPopup(cardSlot.index)
-               onCardClicked: service.invokePopupDefault(cardSlot.index)
-diff --git i/shell/plugins/notifications/components/NotificationCard.qml w/shell/plugins/notifications/components/NotificationCard.qml
---- i/shell/plugins/notifications/components/NotificationCard.qml
-+++ w/shell/plugins/notifications/components/NotificationCard.qml
-@@ -32,6 +32,22 @@
-   property string fontFamily: ""
- 
-   readonly property bool hovered: hoverTracker.hovered
-+  // The card is under the user's hand: a mouse over it, or a finger
-+  // swiping it. The popup container pauses the countdown meanwhile.
-+  readonly property bool held: hovered || swipeHandler.active
++  // The card is under the user's hand: a finger swiping it. The countdown
++  // waits meanwhile, so a card under a finger never expires.
++  readonly property bool held: swipeHandler.active
 +
 +  // Touch: a horizontal swipe dismisses (swipeEnabled), and a close button
 +  // shows in the top-right corner (closeButtonShown), as a tap runs the
-+  // default action and a touch screen has no right button. The container
-+  // shows the button when the seat has a touch screen, so a mouse-only
-+  // desktop looks and behaves as before.
++  // default action and a touch screen has no right button. The scene shows
++  // the button when the seat has a touch screen, so a mouse-only desktop
++  // looks and behaves as before.
 +  property bool swipeEnabled: true
 +  property bool closeButtonShown: false
 +  // How far the card has been swiped sideways, in pixels.
@@ -94,22 +93,23 @@ diff --git i/shell/plugins/notifications/components/NotificationCard.qml w/shell
 +  // Release speed of the last swipe, pixels per second.
 +  property real swipeVelocity: 0
 +  property bool dismissing: false
- 
-   // Inline reply (the freedesktop `inline-reply` action): the popup container
-   // sets the sender's placeholder text while the live notification takes a
-@@ -77,6 +93,23 @@
-   readonly property color accentColor: urgency === 2 ? Commons.Color.urgent : (urgency === 0 ? dimColor : Commons.Color.notifications.countdown)
-   readonly property var cardBorderSpec: Border.surfaceSpec("notifications", "border", Commons.Color.notifications.border, Math.max(1, Style.space(2)))
++
+   readonly property bool critical: row.urgency === 2
+   readonly property color dimColor: Qt.darker(Commons.Color.notifications.text, 1.4)
+   readonly property color bodyColor: Qt.darker(Commons.Color.notifications.text, 1.15)
+@@ -166,6 +183,23 @@
+     return out
+   }
  
 +  // A swipe ends: past 35% of the width, or flicked fast enough the same
 +  // way, the card flies off that side and closes; otherwise it springs back.
 +  function finishSwipe() {
-+    var distance = Math.abs(root.swipeOffset)
-+    var sameWay = root.swipeVelocity * root.swipeOffset > 0
-+    var flung = sameWay && Math.abs(root.swipeVelocity) >= Style.space(900) && distance >= root.width * 0.1
-+    if (root.width > 0 && (distance >= root.width * 0.35 || flung)) {
-+      root.dismissing = true
-+      swipeAnimation.to = (root.swipeOffset < 0 ? -1 : 1) * (root.width + Style.space(24))
++    var distance = Math.abs(swipeOffset)
++    var sameWay = swipeVelocity * swipeOffset > 0
++    var flung = sameWay && Math.abs(swipeVelocity) >= Style.space(900) && distance >= width * 0.1
++    if (width > 0 && (distance >= width * 0.35 || flung)) {
++      dismissing = true
++      swipeAnimation.to = (swipeOffset < 0 ? -1 : 1) * (width + Style.space(24))
 +      swipeAnimation.dismiss = true
 +    } else {
 +      swipeAnimation.to = 0
@@ -118,144 +118,156 @@ diff --git i/shell/plugins/notifications/components/NotificationCard.qml w/shell
 +    swipeAnimation.restart()
 +  }
 +
-   function sanitizeBody(s) {
-     return NotificationLogic.sanitizeBody(s, app, appIcon)
-   }
-@@ -92,13 +125,23 @@
-   implicitWidth: Style.space(380)
-   // Add vertical border insets so mainColumn (inset by border on top/left/right)
-   // doesn't push content under the bottom edge.
--  implicitHeight: mainColumn.implicitHeight + borderTop + borderBottom
-+  implicitHeight: Math.max(mainColumn.implicitHeight, closeButtonShown ? closeButton.height : 0) + borderTop + borderBottom
-   radius: cornerRadius
-   color: Commons.Color.notifications.background
-   borderSpec: cardBorderSpec
-   clip: true
+   function doDeed(deed) {
+     var kind = String(deed.kind || "")
+     if (kind === "action") { actionInvoked(String(deed.value)); return }
+@@ -184,7 +218,7 @@
+   // time, and gets a fresh display period of its own duration. Its picture
+   // may be new at the same path, so the image is read again too.
+   property real remaining: Number(row.duration || 0)
+-  readonly property bool ticking: Number(row.duration || 0) > 0 && !paused && !replying
++  readonly property bool ticking: Number(row.duration || 0) > 0 && !paused && !replying && !held
+   readonly property string arrival: String(row.ts) + ":" + String(row.duration)
+   property bool reloading: false
+   onArrivalChanged: {
+@@ -207,6 +241,9 @@
  
--  HoverHandler { id: hoverTracker }
-+  // The swipe moves the card sideways and fades it as it goes.
-+  transform: Translate { x: root.swipeOffset }
-+  opacity: 1 - 0.6 * Math.min(1, Math.abs(root.swipeOffset) / Math.max(1, root.width))
-+
-+  // A mouse or stylus resting on the card pauses its countdown. A finger
-+  // doesn't hover, so touch is left out: a toast that was touched must not
-+  // count as hovered and stop expiring.
-+  HoverHandler {
-+    id: hoverTracker
-+    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
-+  }
+   width: cardWidth
+   height: body.height
++  // The swipe moves the card sideways; the card's own opacity belongs to
++  // the scene's layout, so the fade rides the plate and the content.
++  x: swipeOffset
  
-   MouseArea {
-     anchors.fill: parent
-@@ -115,6 +158,61 @@
-     }
-   }
+   LayoutMirroring.enabled: Commons.I18n.rightToLeft
+   LayoutMirroring.childrenInherit: true
+@@ -262,6 +299,7 @@
+     id: plate
+     width: body.width
+     height: body.height
++    opacity: 1 - 0.6 * Math.min(1, Math.abs(card.swipeOffset) / Math.max(1, card.width))
+     radius: Style.cornerRadius
+     color: Commons.Color.notifications.background
+     borderSpec: Border.surfaceSpec("notifications", "border", Commons.Color.notifications.border,
+@@ -281,6 +319,7 @@
+     id: body
+     width: parent.width
+     height: card.drawnHeight
++    opacity: 1 - 0.6 * Math.min(1, Math.abs(card.swipeOffset) / Math.max(1, card.width))
  
-+  // Swipe to dismiss. Only sideways movement past the threshold starts it,
-+  // so a tap still runs the default action and a right-click still closes.
-+  // Off while a reply is being typed, so selecting text can't throw the
-+  // reply away.
-+  DragHandler {
-+    id: swipeHandler
-+    target: null
-+    yAxis.enabled: false
-+    dragThreshold: Style.space(12)
-+    enabled: root.swipeEnabled && !root.replying && !root.dismissing
-+    onActiveChanged: {
-+      if (active) {
-+        swipeAnimation.stop()
-+        root.swipeVelocity = 0
-+      } else {
-+        root.finishSwipe()
+     Row {
+       id: layout
+@@ -432,6 +471,7 @@
+             anchors.verticalCenter: parent.verticalCenter
+             width: Math.max(1, parent.width - rightSide.width
+                    - (titleMarks.visible ? titleMarks.width + Style.space(7) : 0)
++                   - (card.closeButtonShown ? Style.space(44) : 0)
+                    - Style.space(8))
+             text: card.redacted ? I18n.t("notifications.redactedSummary") : String(card.row.summary || "")
+             color: Commons.Color.notifications.text
+@@ -471,6 +511,7 @@
+           Row {
+             id: rightSide
+             anchors.right: parent.right
++            anchors.rightMargin: card.closeButtonShown ? Style.space(44) : 0
+             anchors.verticalCenter: title.verticalCenter
+             spacing: Style.space(5)
+ 
+@@ -690,7 +731,98 @@
+           // throw the reply away.
+           if (!card.replying) card.activated()
+         } else card.dismissed()
 +      }
 +    }
-+    onActiveTranslationChanged: {
-+      if (!active) return
-+      root.swipeOffset = activeTranslation.x
-+      root.swipeVelocity = centroid.velocity.x
-+    }
-+  }
 +
-+  SequentialAnimation {
-+    id: swipeAnimation
-+    property real to: 0
-+    property bool dismiss: false
-+    NumberAnimation {
-+      target: root
-+      property: "swipeOffset"
-+      to: swipeAnimation.to
-+      duration: swipeAnimation.dismiss ? 140 : 200
-+      easing.type: swipeAnimation.dismiss ? Easing.InQuad : Easing.OutBack
-+    }
-+    ScriptAction {
-+      script: {
-+        if (!swipeAnimation.dismiss) return
-+        root.closeRequested()
-+        // A container that keeps the card (nothing removes it) gets it back.
-+        swipeResetTimer.restart()
++    // Swipe to dismiss. Only sideways movement past the threshold starts
++    // it, so a tap still runs the default action and a right-click still
++    // closes. Off while a reply is being typed, so selecting text can't
++    // throw the reply away.
++    DragHandler {
++      id: swipeHandler
++      target: null
++      yAxis.enabled: false
++      dragThreshold: Style.space(12)
++      enabled: card.swipeEnabled && !card.replying && !card.dismissing
++      onActiveChanged: {
++        if (active) {
++          swipeAnimation.stop()
++          card.swipeVelocity = 0
++        } else {
++          card.finishSwipe()
++        }
++      }
++      onActiveTranslationChanged: {
++        if (!active) return
++        card.swipeOffset = activeTranslation.x
++        card.swipeVelocity = centroid.velocity.x
+       }
+     }
++
++    SequentialAnimation {
++      id: swipeAnimation
++      property real to: 0
++      property bool dismiss: false
++      NumberAnimation {
++        target: card
++        property: "swipeOffset"
++        to: swipeAnimation.to
++        duration: swipeAnimation.dismiss ? 140 : 200
++        easing.type: swipeAnimation.dismiss ? Easing.InQuad : Easing.OutBack
++      }
++      ScriptAction {
++        script: {
++          if (!swipeAnimation.dismiss) return
++          card.dismissed()
++          // A container that keeps the card (nothing removes it) gets it
++          // back.
++          swipeResetTimer.restart()
++        }
 +      }
 +    }
-+  }
 +
-+  Timer {
-+    id: swipeResetTimer
-+    interval: 400
-+    onTriggered: {
-+      root.dismissing = false
-+      root.swipeOffset = 0
++    Timer {
++      id: swipeResetTimer
++      interval: 400
++      onTriggered: {
++        card.dismissing = false
++        card.swipeOffset = 0
++      }
 +    }
-+  }
 +
-   ColumnLayout {
-     id: mainColumn
-     // Inset by the card border so the content doesn't paint over the card's
-@@ -131,7 +229,8 @@
-     RowLayout {
-       Layout.fillWidth: true
-       Layout.leftMargin: Style.space(12)
--      Layout.rightMargin: Style.space(12)
-+      // Text stays clear of the close button's touch target.
-+      Layout.rightMargin: root.closeButtonShown ? closeButton.width : Style.space(12)
-       Layout.topMargin: root.singleLineToast ? Style.space(7) : Style.space(10)
-       Layout.bottomMargin: root.singleLineToast ? Style.space(7) : Style.space(10)
-       spacing: root.collapseRedundantIcon ? 0 : (root.compactGlyph ? Style.space(8) : Style.space(12))
-@@ -268,4 +367,39 @@
-     }
++    // Close button for touch: a small glyph with a 44 px target in the
++    // top-right corner, inside the border. A seat with only a mouse shows
++    // none (the hover close mark serves it), so desktops look as before.
++    MouseArea {
++      id: closeButton
++      objectName: "notificationCloseButton"
++      visible: card.closeButtonShown
++      anchors.top: parent.top
++      anchors.right: parent.right
++      anchors.topMargin: plate.borderTop
++      anchors.rightMargin: plate.borderRight
++      width: Style.space(44)
++      height: Style.space(44)
++      cursorShape: Qt.PointingHandCursor
++      onClicked: card.dismissed()
++
++      Rectangle {
++        anchors.centerIn: parent
++        width: Style.space(28)
++        height: width
++        radius: width / 2
++        color: Commons.Color.notifications.text
++        opacity: closeButton.pressed ? 0.18 : 0
++      }
++
++      Text {
++        textFormat: Text.PlainText
++        anchors.centerIn: parent
++        text: "✕"
++        color: card.dimColor
++        font.family: "Liberation Sans"
++        font.pixelSize: Style.font.title
++      }
++    }
    }
- 
-+  // Close button: a small glyph with a 44 px touch target in the top-right
-+  // corner, inside the border.
-+  MouseArea {
-+    id: closeButton
-+    objectName: "notificationCloseButton"
-+    visible: root.closeButtonShown
-+    anchors.top: parent.top
-+    anchors.right: parent.right
-+    anchors.topMargin: root.borderTop
-+    anchors.rightMargin: root.borderRight
-+    width: Style.space(44)
-+    height: Style.space(44)
-+    cursorShape: Qt.PointingHandCursor
-+    Accessible.role: Accessible.Button
-+    Accessible.name: "Dismiss notification"
-+    onClicked: root.closeRequested()
-+
-+    Rectangle {
-+      anchors.centerIn: parent
-+      width: Style.space(28)
-+      height: width
-+      radius: width / 2
-+      color: Commons.Color.notifications.text
-+      opacity: closeButton.pressed ? 0.18 : 0
-+    }
-+
-+    Text {
-+      textFormat: Text.PlainText
-+      anchors.centerIn: parent
-+      text: "󰅖"
-+      color: root.dimColor
-+      font.family: root.fontFamily
-+      font.pixelSize: Style.font.icon
-+    }
-+  }
  }
