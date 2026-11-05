@@ -10,10 +10,13 @@
 # OMAMOBILE_UPDATE=1 omarchy-update.
 #
 # Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4).
-diff --git i/bin/omarchy-update w/bin/omarchy-update
---- i/bin/omarchy-update
-+++ w/bin/omarchy-update
-@@ -7,6 +7,14 @@
+# 2026-11-06: update handoff block now sits above the new sudo-keepalive scaffolding — regenerated against Omarchy 4.5.0-3, same
+# semantic change (the previous revision carries the 4.4-era hunks).
+
+
+--- a/bin/omarchy-update
++++ b/bin/omarchy-update
+@@ -8,6 +8,14 @@
  
  set -e
  
@@ -25,6 +28,6 @@ diff --git i/bin/omarchy-update w/bin/omarchy-update
 +  exec /usr/bin/omamobile-update "$@"
 +fi
 +
- if [[ -z ${OMARCHY_UPDATE_LOGGED:-} ]]; then
-   script_command=$(printf '%q ' "$0" "$@")
-   exec env OMARCHY_UPDATE_LOGGED=1 script -qefc "$script_command" "/tmp/omarchy-update.log"
+ update_stay_awake_stopped=0
+ sudo_keepalive_pid=""
+ 
