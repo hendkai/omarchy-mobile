@@ -42,12 +42,18 @@ alarm_die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
 # Debian/Arch: the qemu-aarch64 node is enough. NixOS: aarch64-linux must be
 # enabled and its flags: line must contain F, or the container cannot run it.
+# An aarch64 Docker host (an arm64 Linux machine, or Apple Silicon with
+# Colima or Docker Desktop) runs arm64 containers natively: no handler needed.
 alarm_require_binfmt() {
   local node=/proc/sys/fs/binfmt_misc/aarch64-linux
   if [[ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]]; then
     return 0
   fi
   if [[ -e $node ]] && grep -qx enabled "$node" && grep -q '^flags:.*F' "$node"; then
+    return 0
+  fi
+  if command -v docker >/dev/null 2>&1 &&
+     [[ $(docker info --format '{{.Architecture}}' 2>/dev/null || true) == aarch64 ]]; then
     return 0
   fi
   alarm_die "no usable aarch64 binfmt handler: install qemu-user-static-binfmt, or enable boot.binfmt.emulatedSystems with boot.binfmt.preferStaticEmulators so aarch64-linux is enabled and its flags: line contains F"
