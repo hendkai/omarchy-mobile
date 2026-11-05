@@ -10,10 +10,14 @@
 # uninstall question is open. The keys work as before.
 #
 # Against Omarchy 4.0.6 (edge 4.0.6-1), before the menu-first-frame bridge.
+
+# 2026-11-06: swipe block carried over - card kept its anchors. header is a FilterInput now so the back button sits beside it and the input yields the width — regenerated against Omarchy 4.5.0-3, same
+# semantic change (the previous revision carries the 4.4-era hunks).
+
 diff --git i/shell/plugins/menu/Menu.qml w/shell/plugins/menu/Menu.qml
---- i/shell/plugins/menu/Menu.qml
-+++ w/shell/plugins/menu/Menu.qml
-@@ -1066,6 +1066,50 @@
+--- a/shell/plugins/menu/Menu.qml
++++ b/shell/plugins/menu/Menu.qml
+@@ -1317,6 +1317,50 @@
  
        MouseArea { anchors.fill: parent; onClicked: {} }
  
@@ -64,7 +68,7 @@ diff --git i/shell/plugins/menu/Menu.qml w/shell/plugins/menu/Menu.qml
        Item {
          id: keyCatcher
          anchors.fill: parent
-@@ -1151,9 +1195,46 @@
+@@ -1400,9 +1444,44 @@
            radius: root.cornerRadius
            color: "transparent"
  
@@ -81,8 +85,6 @@ diff --git i/shell/plugins/menu/Menu.qml w/shell/plugins/menu/Menu.qml
 +            height: Math.max(parent.height, Style.space(44))
 +            hoverEnabled: true
 +            cursorShape: Qt.PointingHandCursor
-+            Accessible.role: Accessible.Button
-+            Accessible.name: "Back"
 +            onClicked: root.goBack()
 +
 +            Rectangle {
@@ -104,10 +106,10 @@ diff --git i/shell/plugins/menu/Menu.qml w/shell/plugins/menu/Menu.qml
 +            }
 +          }
 +
-           Text {
-             textFormat: Text.PlainText
+           FilterInput {
+             id: filterInput
              anchors.left: parent.left
 +            anchors.leftMargin: backButton.visible ? backButton.width : 0
              anchors.right: parent.right
              anchors.verticalCenter: parent.verticalCenter
-             text: root.filterText || (root.dmenuActive ? (root.dmenuPrompt + "…") : ((root.item(root.activeMenu) ? (root.item(root.activeMenu).title || root.item(root.activeMenu).label) : "Go") + "…"))
+             keyHandler: keyCatcher
