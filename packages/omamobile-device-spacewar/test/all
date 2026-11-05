@@ -1,0 +1,78 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-device-spacewar. Configuration only: parse checks,
+# staging checks, and the descriptor must match device/spacewar's.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+bash -n install || fail "install parses"
+pass "install parses"
+
+grep -q '\.\./\.\.' install && fail "install reaches outside the package directory"
+pass "install stays inside the package directory"
+
+grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
+grep -q '^install=omamobile-device-spacewar.install$' PKGBUILD \
+  || fail "the pacman install script is not named"
+[[ -f etc/omamobile-mirrorlist && -f omamobile-device-spacewar.install ]] \
+  || fail "the pacman mirrorlist or install script is missing"
+pass "pacman gets the keyring, the mirrorlist, and the install script"
+
+if [[ -f ../../device/spacewar/device.conf ]]; then
+  cmp -s device.conf ../../device/spacewar/device.conf \
+    || fail "device.conf drifted from the descriptor"
+  pass "device.conf matches the descriptor"
+fi
+
+# The feedbackd theme is JSON and names the device's compatible.
+python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "feedbackd/nothing,spacewar.json" \
+  || fail "the feedbackd theme is not valid JSON"
+pass "the feedbackd theme parses as JSON"
+
+# The UCM names its card (NP1) and both verbs, and includes only files
+# alsa-ucm-conf ships.
+grep -q 'SectionUseCase."HiFi"' ucm/Nothing/spacewar/NP1.conf || fail "NP1.conf has no HiFi verb"
+grep -q 'SectionUseCase."Voice Call"' ucm/Nothing/spacewar/NP1.conf || fail "NP1.conf has no Voice Call verb"
+inc=$(sed -n 's/^Include\.[^.]*\.File "\([^"]*\)".*/\1/p' ucm/Nothing/spacewar/NP1.conf)
+[[ -n $inc ]] || fail "NP1.conf includes nothing (card-init/wcd-init are required)"
+for i in $inc; do
+  [[ $i == /lib/* || $i == /codecs/* ]] || fail "NP1.conf includes $i, outside alsa-ucm-conf's trees"
+done
+pass "the UCM has both verbs and only alsa-ucm-conf includes"
+
+# Stage everything and check the tree.
+./install "$tmp/root"
+for f in usr/share/omamobile/device.conf \
+         usr/share/alsa/ucm2/Nothing/spacewar/NP1.conf \
+         usr/share/alsa/ucm2/Nothing/spacewar/HiFi.conf \
+         usr/share/alsa/ucm2/Nothing/spacewar/VoiceCall.conf \
+         "usr/share/feedbackd/themes/nothing,spacewar.json" \
+         usr/lib/udev/rules.d/72-vibration-spacewar.rules \
+         usr/lib/udev/rules.d/81-libssc-nothing-spacewar.rules \
+         usr/lib/udev/rules.d/99-ufs-no-clkscale.rules \
+         usr/share/wireplumber/wireplumber.conf.d/54-spacewar-bt-sco-offload.conf \
+         usr/lib/systemd/sleep.conf.d/50-spacewar-deep-only.conf \
+         etc/libcamera/ipa/simple/imx471.yaml \
+         etc/libcamera/ipa/simple/imx766.yaml \
+         etc/libcamera/ipa/simple/s5kjn1.yaml \
+         usr/share/omamobile/device-spacewar/version \
+         usr/share/licenses/omamobile-device-spacewar/LICENSE \
+         etc/pacman.d/omamobile-mirrorlist; do
+  [[ -f $tmp/root/$f ]] || fail "install stages $f"
+done
+pass "install stages every file"
+
+# The haptics rule must tag the vibrator for feedbackd before the seat ACLs.
+grep -q 'FEEDBACKD_TYPE.*="vibra"' "$tmp/root/usr/lib/udev/rules.d/72-vibration-spacewar.rules" \
+  || fail "the haptics rule does not tag the vibrator"
+pass "the haptics rule tags the vibrator for feedbackd"
+
+# Suspend stays deep-only: s2idle hangs this phone.
+grep -q '^SuspendState=mem$' "$tmp/root/usr/lib/systemd/sleep.conf.d/50-spacewar-deep-only.conf" \
+  || fail "suspend is not deep-only"
+pass "suspend is deep-only"
+
+echo "all ok"

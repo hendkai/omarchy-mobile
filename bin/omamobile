@@ -123,8 +123,8 @@ load_device() {
     fi
   done < "$file"
   case $DEV_BOOT_METHOD in
-    android-v4|qcom-abl) ;;
-    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports android-v4 and qcom-abl" ;;
+    android-v4|qcom-abl|qcom-abl-v2) ;;
+    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports android-v4, qcom-abl and qcom-abl-v2" ;;
   esac
   [[ $DEV_CODENAME == "$DEVICE" ]] || die "$file: CODENAME=$DEV_CODENAME, expected $DEVICE"
   # Safety: the guard's allowlist may name slot B's boot images and userdata
@@ -143,20 +143,36 @@ load_device() {
   done
   [[ $seen_rw == *" userdata "* ]] || die "$file: UFS_RW must include userdata"
 
-  if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
+  if [[ $DEV_BOOT_METHOD == qcom-abl || $DEV_BOOT_METHOD == qcom-abl-v2 ]]; then
     for key in CODENAME SOC PACKAGE DTB BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
       p="DEV_$key"
       [[ -n ${!p:-} ]] || die "$file: $key is missing"
     done
-    # Qualcomm ABL boots a single header-v2 boot.img (kernel + ramdisk + DTB).
+    # Qualcomm ABL boots a single header-v2 boot.img (kernel + ramdisk + DTB);
+    # qcom-abl wraps it in dodge's two-stage chain loader, qcom-abl-v2 packs
+    # it directly (postmarketOS' format on the older ABLs).
     local seen=" "
     for p in $DEV_BOOT_IMAGES; do
-      [[ $p == boot ]] || die "$file: qcom-abl BOOT_IMAGES may hold only boot, not $p"
+      [[ $p == boot ]] || die "$file: $DEV_BOOT_METHOD BOOT_IMAGES may hold only boot, not $p"
       [[ $seen != *" $p "* ]] || die "$file: BOOT_IMAGES names $p twice"
       seen+="$p "
     done
     [[ $seen == *" boot "* ]] || die "$file: BOOT_IMAGES must include boot"
     slot_b_allowed boot || die "$file: boot_b is not in UFS_RW"
+    if [[ $DEV_BOOT_METHOD == qcom-abl-v2 ]]; then
+      # The header-v2 packer's numbers, from the stock bootloader's
+      # expectations (postmarketOS' deviceinfo for the board): page size,
+      # base and the four offsets, and the DTB appended to the kernel image.
+      local hex='^0x[0-9a-f]{1,10}$'
+      [[ ${DEV_BOOT_PAGESIZE:-} =~ ^(4096|2048|1024|512)$ ]] \
+        || die "$file: BOOT_PAGESIZE must be 512, 1024, 2048 or 4096, not '${DEV_BOOT_PAGESIZE:-missing}'"
+      for key in BOOT_BASE BOOT_KERNEL_OFFSET BOOT_RAMDISK_OFFSET BOOT_DTB_OFFSET BOOT_TAGS_OFFSET; do
+        p="DEV_$key"
+        [[ ${!p:-} =~ $hex ]] || die "$file: $key must be a hex address like 0x8000, not '${!p:-missing}'"
+      done
+      [[ ${DEV_BOOT_APPEND_DTB:-1} == 1 ]] \
+        || die "$file: BOOT_APPEND_DTB must be 1 (the only layout this packer writes)"
+    fi
   else
     for key in CODENAME SOC PACKAGE DTB DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE \
         VENDOR_PAGESIZE OS_VERSION OS_PATCH_LEVEL BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
@@ -756,9 +772,9 @@ cmd_images() {
   load_device
   local img="$KERNEL_OUT/images"
   # Pixels: the pinned mkbootimg or the checkout's (MKBOOTIMG_DIR).
-  # Tree-local mkbootimg is for qcom-abl.
+  # Tree-local mkbootimg is for qcom-abl and qcom-abl-v2.
   local tools="$MKBOOTIMG_DIR"
-  if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
+  if [[ $DEV_BOOT_METHOD == qcom-abl || $DEV_BOOT_METHOD == qcom-abl-v2 ]]; then
     tools="$ROOT/system/tools/mkbootimg"
     [[ -f $tools/mkbootimg.py ]] || tools="$SRC_DIR/system/tools/mkbootimg"
   fi
@@ -850,6 +866,38 @@ cmd_images() {
     JOBS="$JOBS" \
       "$ROOT/tools/dodge-chain" pack
     cp -- "$chain_out/images/boot-chain.img" "$img/boot.img"
+    printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
+    ls -lh "$img"/*.img
+    sha256sum "$img/boot.img"
+    return 0
+  fi
+
+  if [[ $DEV_BOOT_METHOD == qcom-abl-v2 ]]; then
+    # A single header-v2 boot image, exactly the format postmarketOS flashes
+    # on this phone: the board DTB appended to the compressed kernel
+    # (BOOT_APPEND_DTB), the shared initramfs as the ramdisk, and the
+    # descriptor's offsets from the stock bootloader's deviceinfo. The
+    # bootloader applies stock's dtbo partitions on top of the base DTB it
+    # finds; the installer erases dtbo_b, so only our DTB is in effect.
+    # needs: mkbootimg (system/tools, AOSP Apache-2.0, never committed)
+    [[ -f "$boot/Image.gz" ]] || die "qcom-abl-v2 needs $boot/Image.gz (build Image.gz)"
+    [[ -f $tools/mkbootimg.py ]] ||
+      die "qcom-abl-v2 images need $ROOT/system/tools/mkbootimg/mkbootimg.py or $SRC_DIR/system/tools/mkbootimg (or mkbootimg on PATH)"
+    cat "$boot/Image.gz" "$dtb" > "$img/$DEV_CODENAME-kernel-dtb"
+    say "Boot image (qcom-abl-v2, header 2): boot.img with $DEV_DTB appended"
+    "$tools/mkbootimg.py" \
+      --kernel "$img/$DEV_CODENAME-kernel-dtb" \
+      --ramdisk "$KERNEL_OUT/initramfs.cpio.lz4" \
+      --cmdline "${DEV_CMDLINE:-}" \
+      --base "$DEV_BOOT_BASE" \
+      --kernel_offset "$DEV_BOOT_KERNEL_OFFSET" \
+      --ramdisk_offset "$DEV_BOOT_RAMDISK_OFFSET" \
+      --tags_offset "$DEV_BOOT_TAGS_OFFSET" \
+      --dtb_offset "$DEV_BOOT_DTB_OFFSET" \
+      --pagesize "$DEV_BOOT_PAGESIZE" \
+      --header_version 2 \
+      --output "$img/boot.img" || die "mkbootimg failed"
+    rm "$img/$DEV_CODENAME-kernel-dtb"
     printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
     ls -lh "$img"/*.img
     sha256sum "$img/boot.img"
@@ -1058,8 +1106,8 @@ cmd_fastboot() {
   # Qualcomm ABL panic path is uncharacterized on dodge (sysrq-c fallthrough
   # when reboot-to bootloader is ignored). Refuse before any phone I/O; use
   # the buttons instead (see device/$DEVICE/BRINGUP-M1.md).
-  [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
-    die "fastboot refuses BOOT_METHOD=qcom-abl (panic path uncharacterized on this ABL; use the buttons — see device/$DEVICE/BRINGUP-M1.md)"
+  [[ $DEV_BOOT_METHOD != qcom-abl && $DEV_BOOT_METHOD != qcom-abl-v2 ]] ||
+    die "fastboot refuses BOOT_METHOD=qcom-abl/qcom-abl-v2 (panic path uncharacterized on this ABL; use the buttons — see device/$DEVICE/BRINGUP-M1.md)"
   in_fastboot && { say "Already in fastboot"; return 0; }
   for i in $(seq 1 12); do
     if adb get-state 2>/dev/null | grep -q device; then
@@ -1093,8 +1141,8 @@ cmd_flash() {
   # successful and refill retries; the bit-54 mark has no §3.1 entry yet.
   # Refuse here; day-2 updates use push once that path is viable, and the
   # installer PR can reopen flash with the rest.
-  [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
-    die "flash refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
+  [[ $DEV_BOOT_METHOD != qcom-abl && $DEV_BOOT_METHOD != qcom-abl-v2 ]] ||
+    die "flash refuses BOOT_METHOD=qcom-abl/qcom-abl-v2 (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
   local serial
@@ -1130,8 +1178,8 @@ cmd_push() {
   # Same class of refusal as flash: boot_b is on sde here, and there is no
   # in-tree day-2 rewrite path for qcom-abl yet. Refuse before any phone I/O
   # (modules-push would otherwise rewrite the running root's modules).
-  [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
-    die "push refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
+  [[ $DEV_BOOT_METHOD != qcom-abl && $DEV_BOOT_METHOD != qcom-abl-v2 ]] ||
+    die "push refuses BOOT_METHOD=qcom-abl/qcom-abl-v2 (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   "$ssh" true || die "phone not reachable at 172.16.42.1"
   # Refuse before any write. A phone whose initramfs has no reboot-to would

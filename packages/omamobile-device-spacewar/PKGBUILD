@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Snailberg port of derekross/omarchy-mobile for spacewar
+pkgname=omamobile-device-spacewar
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile support for the Nothing Phone (1) (spacewar): ALSA UCM, feedbackd Glyph theme, haptics, camera tuning"
+arch=(any)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(
+  alsa-ucm-conf
+  bash
+  feedbackd
+  omamobile-keyring
+  systemd
+)
+provides=(omamobile-device)
+conflicts=(omamobile-device)
+backup=(etc/pacman.d/omamobile-mirrorlist)
+install=omamobile-device-spacewar.install
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

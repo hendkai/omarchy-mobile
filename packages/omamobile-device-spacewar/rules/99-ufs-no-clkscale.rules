@@ -1,0 +1,26 @@
+# /etc/udev/rules.d/99-ufs-sin-escalado.rules — spacewar (2026-09-14)
+#
+# Desactivar el escalado de frecuencia del reloj del UFS (el disco del sistema).
+#
+# POR QUÉ
+#   El 2026-09-14 11:16, unos 10 s después de volver a entrar en la sesión (mucha lectura de disco), el
+#   almacenamiento dejó de responder y perro-vivo reinició el móvil. No quedaron pilas (el perro muerde antes
+#   de los 120 s del detector de tareas colgadas), pero la firma es la del congelado de surya del 2026-08-23,
+#   que sí se capturó entero:
+#
+#     kworker devfreq_monitor -> ufshcd_devfreq_scale -> down_write(clk_scaling_lock)
+#         ↑ quiere el cerrojo para ESCRIBIR
+#     kworker events -> ufshcd_exception_event_handler -> consulta al chip (ufshcd_dev_man_lock: down_read)
+#         ↑ lo tiene como LECTOR, esperando una respuesta del chip que no vuelve
+#
+#   Mismo driver (ufshcd + ufs-qcom) y mismo cerrojo en el 7.2.2 de spacewar. Como la raíz vive en el UFS,
+#   todo lo que toca disco se para con el kernel vivo y ocioso. Sin escalado no hay escritor que pida el cerrojo.
+#
+# ⚠️ Es una MITIGACIÓN y además sin confirmar en este móvil: si vuelve a pasar con esto puesto, no era esto, y
+#    perro-vivo ya vuelca las tareas bloqueadas (SysRq w) a ramoops antes de reiniciar.
+# ⚠️ Medido al aplicarlo (2026-09-14): el reloj se queda en 75 MHz y no hay transición, como en surya, aunque el
+#    código del 7.2.2 intenta subirlo al máximo al desactivar. Con escalado pasaba casi todo el tiempo en 75 MHz.
+#    Queda por comprobar la velocidad del disco y el consumo en reposo.
+# Revertir en caliente: echo 1 | sudo tee /sys/devices/platform/soc@0/1d84000.ufshc/clkscale_enable
+ACTION=="add", SUBSYSTEM=="platform", KERNEL=="1d84000.ufshc", ATTR{clkscale_enable}="0"
+ACTION=="bind", SUBSYSTEM=="platform", KERNEL=="1d84000.ufshc", ATTR{clkscale_enable}="0"

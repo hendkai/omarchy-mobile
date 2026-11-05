@@ -1,0 +1,7 @@
+# /etc/udev/rules.d/72-vibracion-spacewar.rules — spacewar (2026-09-13)
+#
+# Vibración: el driver qcom-spmi-haptics (kernel r125+, bloque de haptics del PM8350B) crea un dispositivo de entrada
+# con force feedback que feedbackd no conoce (sus reglas solo nombran aw86927-haptics, pwm-vibrator…). Esta regla
+# lo marca como vibrador para feedbackd y le da acceso al usuario de la sesión (uaccess).
+# Antes de 73-seat-late.rules, que es la que aplica las ACL de uaccess.
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT}=="1", SUBSYSTEMS=="input", ATTRS{name}=="qcom-spmi-haptics", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra"

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: CC0-1.0
+# /etc/libcamera/ipa/simple/imx471.yaml — cámara frontal IMX471 de spacewar (2026-09-14)
+#
+# Como imx766.yaml: con uncalibrated.yaml el nivel de negro se estima con la imagen y en escenas oscuras sale un tinte
+# magenta. Negro de 64 en 10 bits = 4096 en la escala de 16 bits de libcamera. Sin Ccm hasta calibrarla.
+%YAML 1.1
+---
+version: 1
+algorithms:
+  - BlackLevel:
+      blackLevel: 4096
+  - Awb:
+  - Adjust:
+  - Agc:
+...

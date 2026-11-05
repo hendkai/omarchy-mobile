@@ -529,3 +529,65 @@ grep -q 'modprobe:qcom_q6v5_pas\|modprobe:qcom-q6v5-pas' "$tad/log" \
 grep -q 'modprobe:fastrpc' "$tad/log" || fail "adsp-battery should modprobe fastrpc"
 grep -q 'insmod:' "$tad/log" && { cat "$tad/log"; fail "adsp-battery must not insmod when modprobe works"; }
 echo "ok - adsp-battery prefers modprobe over held kos"
+
+# --- qcom-abl-v2: a plain header-v2 boot image (postmarketOS' format) -----
+# No chainload dir and no LIVE_DTB: images accepts the method and stops at
+# the kernel check; a bad page size or offset is refused by the descriptor
+# parser; flash, push and fastboot refuse like qcom-abl.
+mkdir -p "$t/repo/device/abl2dev"
+cat > "$t/repo/device/abl2dev/device.conf" <<'DEVEOF'
+CODENAME=abl2dev
+NAME="ABL v2 probe"
+SOC=sm7325
+COMPATIBLE="qcom,sm7325-nothing-abl2dev"
+PACKAGE=omamobile-device-abl2dev
+BOOT_METHOD=qcom-abl-v2
+DTB=qcom/sm7325-nothing-abl2dev.dtb
+INITRAMFS_INIT=initramfs/init
+PANEL_SIZE=1080x2400
+BOOT_IMAGES=boot
+UFS_RW="boot_b dtbo_b userdata"
+CMDLINE="console=ttyMSM0,115200n8"
+BOOT_PAGESIZE=4096
+BOOT_BASE=0x0
+BOOT_KERNEL_OFFSET=0x8000
+BOOT_RAMDISK_OFFSET=0x1000000
+BOOT_DTB_OFFSET=0x1f00000
+BOOT_TAGS_OFFSET=0x100
+BOOT_APPEND_DTB=1
+DEVEOF
+if DEVICE=abl2dev "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "images unexpectedly succeeded without a kernel"; fi
+grep -q 'build the kernel first' "$t/log" || fail "images did not reach the kernel check for qcom-abl-v2: $(cat "$t/log")"
+[[ ! -e $t/calls ]] || fail "qcom-abl-v2 images accessed the phone"
+echo "ok - BOOT_METHOD=qcom-abl-v2 accepted by images without chainload/ (stops before phone access)"
+
+# The packer's numbers are validated: a bad page size, then a non-hex offset.
+sed 's/^BOOT_PAGESIZE=4096/BOOT_PAGESIZE=4097/' "$t/repo/device/abl2dev/device.conf" > "$t/repo/device/abl2dev/device.conf.new"
+mv "$t/repo/device/abl2dev/device.conf.new" "$t/repo/device/abl2dev/device.conf"
+if DEVICE=abl2dev "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "images accepted a bad BOOT_PAGESIZE"; fi
+grep -q 'BOOT_PAGESIZE must be' "$t/log" || fail "bad BOOT_PAGESIZE failed for the wrong reason: $(cat "$t/log")"
+echo "ok - qcom-abl-v2 validates BOOT_PAGESIZE"
+
+sed 's/^BOOT_PAGESIZE=4097/BOOT_PAGESIZE=4096/; s/^BOOT_KERNEL_OFFSET=0x8000/BOOT_KERNEL_OFFSET=8000/' "$t/repo/device/abl2dev/device.conf" > "$t/repo/device/abl2dev/device.conf.new"
+mv "$t/repo/device/abl2dev/device.conf.new" "$t/repo/device/abl2dev/device.conf"
+if DEVICE=abl2dev "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "images accepted a non-hex offset"; fi
+grep -q 'BOOT_KERNEL_OFFSET must be a hex address' "$t/log" || fail "non-hex offset failed for the wrong reason: $(cat "$t/log")"
+echo "ok - qcom-abl-v2 validates the header offsets"
+
+# flash, push and fastboot refuse qcom-abl-v2 like qcom-abl, before phone I/O.
+sed -i 's/^BOOT_KERNEL_OFFSET=8000/BOOT_KERNEL_OFFSET=0x8000/' "$t/repo/device/abl2dev/device.conf"
+for cmd in flash push fastboot; do
+  if DEVICE=abl2dev "$t/repo/bin/omamobile" "$cmd" > "$t/log" 2>&1; then fail "$cmd unexpectedly accepted qcom-abl-v2"; fi
+  grep -q "$cmd refuses BOOT_METHOD=qcom-abl/qcom-abl-v2" "$t/log" || fail "$cmd did not refuse qcom-abl-v2: $(cat "$t/log")"
+done
+[[ ! -e $t/calls ]] || fail "qcom-abl-v2 flash/push/fastboot accessed the phone"
+echo "ok - BOOT_METHOD=qcom-abl-v2 refused by flash, push and fastboot before phone access"
+
+# The shipped spacewar descriptor is complete: images accepts it as far as
+# the kernel build check.
+mkdir -p "$t/repo/device/spacewar"
+cp device/spacewar/device.conf "$t/repo/device/spacewar/"
+if DEVICE=spacewar "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "spacewar images unexpectedly succeeded without a kernel"; fi
+grep -q 'build the kernel first' "$t/log" || fail "the shipped spacewar descriptor did not pass validation: $(cat "$t/log")"
+[[ ! -e $t/calls ]] || fail "spacewar images accessed the phone"
+echo "ok - the shipped spacewar descriptor passes load_device (stops at the kernel build check)"
