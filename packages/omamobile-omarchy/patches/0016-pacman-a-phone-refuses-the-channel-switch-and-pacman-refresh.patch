@@ -8,43 +8,45 @@
 # this keeps a terminal from doing the same.
 #
 # Against Omarchy 4.0.6 (stable 4.0.6-1).
-diff --git i/bin/omarchy-channel-set w/bin/omarchy-channel-set
---- i/bin/omarchy-channel-set
-+++ w/bin/omarchy-channel-set
-@@ -6,6 +6,16 @@
- 
- set -euo pipefail
+# 2026-11-06: insert points moved - channel-set gained trap block, refresh-pacman rewritten around platform templates so wording says templates now — regenerated against Omarchy 4.5.0-3, same
+# semantic change (the previous revision carries the 4.4-era hunks).
+
+
+--- a/bin/omarchy-channel-set
++++ b/bin/omarchy-channel-set
+@@ -11,6 +11,16 @@
+ trap 'exit 130' INT
+ trap 'exit 143' TERM
  
 +# Omarchy Mobile: a phone's pacman.conf carries [omamobile] and Arch Linux
-+# ARM, which the channel's x86_64 pacman.conf (omarchy-refresh-pacman) drops.
++# ARM, which Omarchy's channel templates (omarchy-refresh-pacman) drop.
 +if [[ -x /usr/bin/omamobile-update ]]; then
 +  echo "omarchy-channel-set: not on an Omarchy Mobile phone. It would replace this phone's" >&2
-+  echo "pacman.conf with Omarchy's x86_64 one (no [omamobile], no Arch Linux ARM) and upgrade" >&2
-+  echo "everything from it. The phone follows Omarchy's stable channel; update it with" >&2
-+  echo "'omarchy update'. See docs/RELEASES.md section 5.4 in derekross/omarchy-mobile." >&2
++  echo "pacman.conf with Omarchy's channel template (no [omamobile], no Arch Linux ARM)" >&2
++  echo "and upgrade everything from it. The phone follows Omarchy's stable channel; update" >&2
++  echo "it with 'omarchy update'. See docs/RELEASES.md section 5.4 in derekross/omarchy-mobile." >&2
 +  exit 1
 +fi
 +
  usage() { echo "Usage: omarchy-channel-set [stable|rc|edge|dev]"; }
  fail() { echo "Error: $*" >&2; exit 1; }
  
-diff --git i/bin/omarchy-refresh-pacman w/bin/omarchy-refresh-pacman
---- i/bin/omarchy-refresh-pacman
-+++ w/bin/omarchy-refresh-pacman
-@@ -3,6 +3,16 @@
- # omarchy:summary=Overwrite the package configuration for /etc/pacman with the Omarchy default of using its dedicated mirrors and repositories, then update all packages.
- # omarchy:requires-sudo=true
+--- a/bin/omarchy-refresh-pacman
++++ b/bin/omarchy-refresh-pacman
+@@ -5,6 +5,16 @@
+ 
+ set -e
  
 +# Omarchy Mobile: a phone's pacman.conf carries [omamobile] and Arch Linux
-+# ARM, which Omarchy's x86_64 pacman.conf and mirrorlist would replace.
++# ARM, which Omarchy's pacman/mirrorlist templates would replace.
 +if [[ -x /usr/bin/omamobile-update ]]; then
 +  echo "omarchy-refresh-pacman: not on an Omarchy Mobile phone. It would replace this phone's" >&2
-+  echo "pacman.conf and mirrorlist with Omarchy's x86_64 ones (no [omamobile], no Arch Linux" >&2
++  echo "pacman.conf and mirrorlist with Omarchy's templates (no [omamobile], no Arch Linux" >&2
 +  echo "ARM) and upgrade everything from them. Update the phone with 'omarchy update'." >&2
 +  echo "See docs/RELEASES.md section 5.4 in derekross/omarchy-mobile." >&2
 +  exit 1
 +fi
 +
- sudo cp -f /etc/pacman.conf /etc/pacman.conf.bak
- sudo cp -f /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak
- 
+ channel="${1:-}"
+ if [[ -n $channel && $channel != "stable" && $channel != "rc" && $channel != "edge" ]]; then
+   echo "Invalid channel: $channel" >&2
