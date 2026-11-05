@@ -332,7 +332,12 @@ for dir in "${build[@]}"; do
         sed -i "0,/^\[omarchy\]/s//[omamobile]\nServer = file:\/\/\/repo\/\$arch\n\n[omarchy]/" /etc/pacman.conf
       fi
       pacman -Sy >/dev/null
-      chown -R builder: /work /srcdest
+      chown -R builder: /work /srcdest 2>/dev/null || true
+      # Hosts whose bind mounts squash ownership (Docker through the Colima
+      # virtiofs on macOS, some NAS mounts): chown reports success but changes
+      # nothing, so builder cannot write the tree it was handed. Open the
+      # modes instead; the files still leave as the user that mounted them.
+      [[ $(stat -c %u "/work/$NAME") == $(id -u builder) ]] || chmod -R a+rwX /work /srcdest
       cd /work/$NAME
       info=$(su builder -c "makepkg --printsrcinfo")
       # Every dependency a repository can provide goes in (the build-time
