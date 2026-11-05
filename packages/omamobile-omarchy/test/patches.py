@@ -879,21 +879,24 @@ ListEnrolledFingers failed: GDBus.Error:net.reactivated.Fprint.Error.Internal: F
 
 
 def lock_fingerprint_probe(t, root):
-    """Patch 0022 (upstream's 879d6583d probe, #170): the lock's probe and
-    omarchy-apply-lock call fingerprint set up only for an enrolled print, not
-    for "has no fingers enrolled", and a failed probe never turns it off."""
+    """The fingerprint probe of upstream's 879d6583d (#170), which Omarchy
+    4.5 carries in full (the series' 0022 backport is dropped on the 4.5
+    line): the lock's probe and omarchy-apply-lock call fingerprint set up
+    only for an enrolled print, not for "has no fingers enrolled", and a
+    failed probe never turns it off."""
     lock = "usr/share/omarchy/shell/plugins/lock/"
     service = read(root, lock + "Service.qml")
     ok("grep -qi finger" not in service and "onExited: root.applyFingerprintProbe(fingerprintCheckStdout.text)" in service
        and 'import "FingerprintModel.js" as FingerprintModel' in service
        and os.path.isfile(os.path.join(root, lock, "FingerprintModel.js")),
-       "real omarchy: the lock classifies fprintd-list's answer (0022)")
+       "real omarchy: the lock classifies fprintd-list's answer (879d6583d)")
     apply_fn = service.split("function applyFingerprintProbe(text) {", 1)
     unknown = apply_fn[1].split('if (status === "unknown") {', 1)[1].split("\n    }\n", 1)[0] if len(apply_fn) == 2 else ""
     ok(unknown and "fingerprintConfigured =" not in unknown and "if (fingerprintConfigured) return" in unknown,
-       "real omarchy: an unknown probe never turns fingerprint off (0022)")
-    ok("interval: 250" in service.split("id: fingerprintRetryTimer", 1)[1].split("}", 1)[0],
-       "real omarchy: a mismatch still retries at 250 ms (0022)")
+       "real omarchy: an unknown probe never turns fingerprint off (879d6583d)")
+    ok("interval: FingerprintModel.MATCH_RETRY_MS" in service.split("id: fingerprintRetryTimer", 1)[1].split("}", 1)[0]
+       and "MATCH_RETRY_MS = 250" in read(root, lock + "FingerprintModel.js"),
+       "real omarchy: a mismatch retry starts at the model's 250 ms pace (879d6583d)")
 
     d = os.path.join(t, "fp-probe")
     fakes = os.path.join(d, "bin")
