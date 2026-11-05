@@ -1,0 +1,308 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# extract-spacewar-firmware: copy the firmware the Nothing Phone (1)
+# (spacewar, sm7325) needs out of a Nothing OS image the user already has,
+# on the user's own machine. Qualcomm's and Nothing's firmware is not ours
+# to redistribute, so Omarchy Mobile never ships it (AGENTS.md section 1);
+# like tools/extract-vendor-firmware for the Pixels, this renames what the
+# stock image carries to what the mainline drivers request.
+#
+# The kernel is sc7280-mainline v7.2.2-sc7280 with the 52 spacewar patches
+# (kernel-spacewar/ in the build wrapper); its device tree names every file
+# under qcom/sm7325/nothing/spacewar/ (sm7325-nothing-spacewar.dts):
+#
+#   modem partition (vfat, image/)    -> usr/lib/firmware/updates/qcom/sm7325/nothing/spacewar/modem.mbn   (MPSS remoteproc)
+#   adsp partition (vfat, image/)     -> .../adsp.mbn    (ADSP remoteproc; audio + sensors DSP)
+#   cdsp partition (vfat, image/)     -> .../cdsp.mbn    (CDSP remoteproc)
+#   wpss partition (vfat, image/)     -> .../wpss.mbn    (WPSS remoteproc, ath11k's WiFi subsystem)
+#   vpu partition (vfat, image/)      -> .../vpu20_1v.mbn (Iris video decoder)
+#   ipa_fws partition (vfat, image/)  -> .../ipa_fws.mbn (IPA, mobile data)
+#   /vendor/firmware/a660_zap.mbn     -> .../a660_zap.mbn (Adreno 660 GPU ZAP shader; freedreno requests it for GPU reset)
+#   /vendor/firmware/*.jsn            -> .../{adspr,adsps,adspua,battmgr,cdspr,modemr}.jsn (remoteproc JSON sidecars)
+#   /vendor/firmware/focaltech_*      -> .../focaltech_ts_novatek.bin (touch, held in case the fts_tp EEPROM is blank)
+#   /vendor/etc/sensors/              -> usr/share/qcom/sm7325/Nothing/spacewar/sensors/   (hexagonrpcd's sensors PD / libssc)
+#   /vendor/etc/socinfo/              -> usr/share/qcom/sm7325/Nothing/spacewar/socinfo/
+#   modem partition image/qca6750/    -> OUT/wifi-board/ (ath11k board data: bdwlan.* + regdb.bin)
+#
+# Which partition image holds which .mbn is discovered, not assumed: every
+# dumped image with a FAT filesystem is listed and searched for the file
+# names above, so a Nothing OS rename or repartition degrades into a clear
+# "missing from this image" instead of a silent wrong copy.
+#
+# Not extracted (linux-firmware covers them): ath11k's amss.bin and m3.bin
+# (ath11k/WCN6750/hw1.0/), the WCN6750 Bluetooth firmware (qca/), and the
+# a660 shader toolkit. The board-2.bin (per-board WiFi calibration) is not
+# packed here: ath11k-bdencoder (qca-swiss-army-knife) needs a JSON manifest,
+# so the raw bdwlan/regdb files are staged to OUT/wifi-board/ and the
+# packaging step is printed — the same step the woodyst port leaves open
+# (spacewar-pmos docs/wifi-modem.es.md). Without it ath11k uses
+# linux-firmware's generic board-2.bin.
+#
+# Output is a tree rooted at /, under usr/lib/firmware/updates (searched
+# before linux-firmware's files, and not owned by any package). Nothing
+# touches the phone. The modem partition's board data is factory radio
+# calibration: keep the output private, never commit or share it.
+#
+# Needs: unzip; payload-dumper-go or payload-dumper (unless SOURCE is a
+# directory of dumped images); mtools (mcopy/mdir) for the FAT partitions;
+# simg2img + lpunpack if the payload's vendor only comes inside super.img;
+# debugfs (e2fsprogs) if vendor is ext4, fsck.erofs (erofs-utils) if EROFS.
+#
+#   tools/extract-spacewar-firmware [-o OUTDIR] [-w WORKDIR] [-f] \
+#       SOURCE
+#
+#   SOURCE   Nothing OS full OTA zip (payload.bin inside), a payload.bin,
+#            or a directory payload-dumper-go already dumped the images into
+set -euo pipefail
+# debugfs and friends live in /sbin on Debian-like hosts
+export PATH=$PATH:/usr/sbin:/sbin
+
+FW_DIR="qcom/sm7325/nothing/spacewar"
+HEX_DIR="usr/share/qcom/sm7325/Nothing/spacewar"
+DEST_REL="usr/lib/firmware/updates"
+
+usage() {
+  cat <<USAGE
+Usage: extract-spacewar-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
+
+  SOURCE   Nothing OS full OTA zip, a payload.bin, or a directory of images
+           dumped from one (payload-dumper-go -o DIR payload.bin)
+  -o DIR   staging root to write into (default: ./out/spacewar-firmware)
+  -w DIR   scratch directory for the payload dump (default: a temp dir; the
+           full dump needs roughly 6 GB)
+  -f       skip the vendor build.prop device check
+
+Install on the phone (from the omamobile repo):
+  tar -C OUTDIR -cf - usr | tools/phone-ssh 'tar -C / -xf -'
+USAGE
+}
+
+say() { printf '==> %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null || die "$1 not found ($2)"; }
+
+OUT="./out/spacewar-firmware" WORK="" FORCE=""
+while getopts "o:w:fh" opt; do
+  case $opt in
+    o) OUT=$OPTARG ;;
+    w) WORK=$OPTARG ;;
+    f) FORCE=1 ;;
+    h) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+shift $((OPTIND - 1))
+[[ $# -eq 1 ]] || { usage >&2; exit 2; }
+SRC=$1
+[[ -e $SRC ]] || die "no such SOURCE: $SRC"
+
+WORK=${WORK:-$(mktemp -d)}
+trap 'rm -rf "$WORK"' EXIT
+[[ -d $WORK ]] || mkdir -p "$WORK"
+
+magic_at() { dd if="$1" bs=1 skip="$2" count=4 status=none | od -An -tx1 | tr -d ' \n'; }
+
+# --- 1) get a directory of partition images ---------------------------------
+if [[ -d $SRC ]]; then
+  PARTS=$SRC
+  say "Using the dumped images in $SRC"
+else
+  need unzip "for reading the OTA zip"
+  if [[ -f $SRC && "$(magic_at "$SRC" 0)" == 43524f41 ]]; then  # "CRAU"
+    ln "$SRC" "$WORK/payload.bin" 2>/dev/null || cp "$SRC" "$WORK/payload.bin"
+  else
+    m=$(unzip -l "$SRC" | awk '$4 ~ /^payload\.bin$/ {print $4; exit}')
+    [[ -n $m ]] || die "no payload.bin in $(basename "$SRC") (is this a full OTA zip?)"
+    say "Unpacking payload.bin"
+    unzip -p "$SRC" "$m" > "$WORK/payload.bin"
+  fi
+  PARTS=$WORK/parts
+  mkdir -p "$PARTS"
+  if command -v payload-dumper-go >/dev/null; then
+    DUMPER="payload-dumper-go -o $PARTS"
+  elif command -v payload-dumper >/dev/null; then
+    DUMPER="payload-dumper -o $PARTS"
+  else
+    die "payload-dumper-go not found (github.com/ssut/payload-dumper-go, or 'pacman -S android-tools'); or pass a directory of already-dumped images as SOURCE"
+  fi
+  say "Dumping the payload's partitions into $PARTS (about 6 GB; skip by dumping once and passing the directory as SOURCE)"
+  $DUMPER "$WORK/payload.bin" >/dev/null
+  rm -f "$WORK/payload.bin"
+fi
+[[ -n $(ls "$PARTS"/*.img 2>/dev/null) ]] || die "no *.img images in $PARTS"
+
+# --- 2) vendor.img: from the dump, or out of super.img -----------------------
+img=""
+for candidate in "$PARTS"/vendor.img "$PARTS"/vendor_a.img; do
+  [[ -f $candidate ]] && img=$candidate && break
+done
+if [[ -z $img && -f $PARTS/super.img ]]; then
+  need lpunpack "install android-tools"
+  say "Unpacking super.img and its vendor partition"
+  if [[ "$(magic_at "$PARTS/super.img" 0)" == ed26ff3a ]]; then
+    need simg2img "install android-tools"
+    simg2img "$PARTS/super.img" "$WORK/super.raw" && mv "$WORK/super.raw" "$PARTS/super.img"
+  fi
+  mkdir -p "$WORK/super"
+  lpunpack -p vendor_a "$PARTS/super.img" "$WORK/super" 2>/dev/null ||
+    lpunpack -p vendor "$PARTS/super.img" "$WORK/super"
+  mv "$WORK/super/"vendor*.img "$WORK/vendor.img"
+  rm -rf "$WORK/super"
+  img=$WORK/vendor.img
+fi
+
+# --- 3) file access helpers: vendor (ext4/EROFS) and FAT partition images ----
+get_vendor_file() { :; }   # set once the filesystem type is known, below
+if [[ -n $img ]]; then
+  if [[ "$(magic_at "$img" 0)" == ed26ff3a ]]; then
+    need simg2img "install android-tools"
+    say "Converting sparse vendor.img"
+    simg2img "$img" "$img.raw" && mv "$img.raw" "$img"
+  fi
+  if [[ "$(od -An -tx2 -j 1080 -N2 "$img" | tr -d ' ')" == ef53 ]]; then
+    need debugfs "install e2fsprogs"
+    say "vendor.img is ext4; reading it with debugfs (no mount)"
+    get_vendor_file() { debugfs -R "dump /$1 $2" "$img" 2>/dev/null; [[ -s $2 ]]; }
+    get_vendor_dir() { mkdir -p "$2" && debugfs -R "rdump /$1 $2" "$img" 2>/dev/null && [[ -d $2/$(basename "$1") ]]; }
+  elif [[ "$(magic_at "$img" 1024)" == e0f5e1e2 ]]; then
+    need fsck.erofs "install erofs-utils"
+    say "vendor.img is EROFS; extracting it with fsck.erofs"
+    fsck.erofs --extract="$WORK/vendor" --no-preserve "$img" >/dev/null
+    get_vendor_file() { [[ -s "$WORK/vendor/$1" ]] && cp "$WORK/vendor/$1" "$2"; }
+    get_vendor_dir() { [[ -d "$WORK/vendor/$1" ]] && mkdir -p "$2" && cp -r "$WORK/vendor/$1" "$2/"; }
+  else
+    die "vendor.img is neither ext4 nor EROFS"
+  fi
+  if get_vendor_file build.prop "$WORK/build.prop"; then
+    dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/build.prop" | head -1)
+    [[ "${dev,,}" == spacewar || -n $FORCE ]] ||
+      die "vendor partition is for '${dev:-unknown}', not spacewar; use -f to override"
+    say "Vendor partition: $(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/build.prop" | head -1)"
+  fi
+else
+  say "No vendor image in the dump; skipping /vendor files (a660_zap, .jsn, touch, sensors, socinfo)"
+fi
+
+# FAT helpers over every dumped image: mdir lists, mcopy reads, no mounting.
+need mdir "install mtools"
+need mcopy "install mtools"
+FAT_IMGS=()
+for f in "$PARTS"/*.img; do
+  [[ "$(dd if="$f" bs=1 skip=510 count=2 status=none | od -An -tx1 | tr -d ' \n')" == 55aa ]] || continue
+  mdir -i "$f" ::/ >/dev/null 2>&1 && FAT_IMGS+=("$f")
+done
+say "FAT partition images: ${#FAT_IMGS[@]}$(for f in "${FAT_IMGS[@]}"; do printf ' %s' "${f##*/}"; done)"
+
+# Copy $1 (a path inside some partition's FAT, leading ::/) to $2.
+fat_cp() {
+  local from=$1 to=$2 f dir
+  dir=${from%/*}/   # from already carries the :: prefix (the FAT's root)
+  for f in "${FAT_IMGS[@]}"; do
+    mdir -i "$f" "$dir" >/dev/null 2>&1 || continue
+    mcopy -i "$f" "$from" "$to" 2>/dev/null && [[ -s $to ]] && return 0
+    rm -f "$to"
+  done
+  return 1
+}
+
+# --- 4) stage the remoteproc firmware ----------------------------------------
+dest=$OUT/$DEST_REL/$FW_DIR
+mkdir -p "$dest"
+is_elf() { [[ "$(magic_at "$1" 0)" == 7f454c46 ]]; }
+
+# wanted file -> where it can come from (FAT name, then /vendor path)
+stage() { # stage WANTED "fat candidates" "vendor candidates"
+  local wanted=$1 to=$dest/$1 fat_cand=$2 vendor_cand=$3 c
+  if [[ -n $fat_cand ]]; then
+    for c in $fat_cand; do fat_cp "::/image/$c" "$to" && break; done
+  fi
+  if [[ ! -s $to && -n $img && -n $vendor_cand ]]; then
+    for c in $vendor_cand; do get_vendor_file "firmware/$c" "$to" && break; done
+  fi
+  [[ -s $to ]] || { printf '  MISSING  %s (no FAT image or /vendor copy carried it)\n' "$wanted" >&2; return 1; }
+  # Only the remoteproc segments are ELF (Qualcomm mbn); the touch blob is raw
+  [[ $wanted != *.mbn ]] || is_elf "$to" || die "$wanted is not an ELF (Qualcomm mbn); refusing to stage it"
+  chmod 0644 "$to"
+  printf '  -> /%s/%s/%s\n' "$DEST_REL" "$FW_DIR" "$wanted"
+}
+
+missing=0
+say "Remoteproc firmware (device tree: sm7325-nothing-spacewar.dts)"
+stage modem.mbn     "modem.mbn"          ""            || missing=1
+stage adsp.mbn      "adsp.mbn"           ""            || missing=1
+stage cdsp.mbn      "cdsp.mbn"           ""            || missing=1
+stage wpss.mbn      "wpss.mbn"           ""            || missing=1
+stage vpu20_1v.mbn  "vpu20_1v.mbn vpu.mbn" ""          || missing=1
+stage ipa_fws.mbn   "ipa_fws.mbn"        ""            || missing=1
+stage a660_zap.mbn  "a660_zap.mbn"       "a660_zap.mbn" || missing=1
+stage focaltech_ts_novatek.bin "" "focaltech_ts_novatek.bin focaltech_fts.bin" || true
+
+say "Remoteproc JSON sidecars"
+for j in adspr adsps adspua battmgr cdspr modemr; do
+  to=$dest/$j.jsn
+  fat_cp "::image/$j.jsn" "$to" || { [[ -n $img ]] && get_vendor_file "firmware/$j.jsn" "$to"; } || true
+  if [[ -s $to ]]; then
+    python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$to" ||
+      die "$j.jsn is not JSON; wrong file staged"
+    chmod 0644 "$to"; printf '  -> /%s/%s/%s.jsn\n' "$DEST_REL" "$FW_DIR" "$j"
+  else
+    printf '  note: %s.jsn not in this image (pd-mapper tolerates its absence)\n' "$j"
+  fi
+done
+
+# --- 5) the sensors PD's file system (hexagonrpcd serves it to the ADSP) -----
+if [[ -n $img ]]; then
+  say "Sensors registry and socinfo (hexagonrpcd / libssc)"
+  reg=$OUT/$HEX_DIR
+  mkdir -p "$reg"
+  get_vendor_dir etc/sensors "$reg" || die "/vendor/etc/sensors is missing from this image"
+  get_vendor_dir etc/socinfo "$reg" 2>/dev/null || printf '  note: no /vendor/etc/socinfo\n'
+  [[ -f $reg/sensors/sns_reg.conf || -d $reg/sensors/registry ]] ||
+    die "/vendor/etc/sensors has neither sns_reg.conf nor registry/ (wrong directory?)"
+  chmod -R u=rwX,go=rX "$reg"
+  printf '  -> /%s/sensors/ and /%s/socinfo/\n' "$HEX_DIR" "$HEX_DIR"
+fi
+
+# --- 6) ath11k board data: staged raw, packed by hand -------------------------
+say "WiFi board data (ath11k WCN6750)"
+board=$OUT/wifi-board
+mkdir -p "$board"
+found=0
+for f in "${FAT_IMGS[@]}"; do
+  for dir in ::/image/qca6750/ ::/image/wifi/; do
+    mdir -i "$f" "$dir" >/dev/null 2>&1 || continue
+    rm -rf "$WORK/bd"; mkdir -p "$WORK/bd"
+    # -s recursive, -n never prompt; the whole directory, filtered below
+    mcopy -isn -i "$f" "$dir*" "$WORK/bd/" >/dev/null 2>&1 || true
+    while IFS= read -r b; do
+      case ${b##*/} in bdwlan*|regdb*) cp "$b" "$board/${b##*/}" && found=1;; esac
+    done < <(find "$WORK/bd" -type f 2>/dev/null)
+  done
+done
+if [[ $found == 1 ]]; then
+  say "Staged $(ls "$board" | tr '\n' ' ')to $OUT/wifi-board/"
+  cat <<NOTE
+
+  Pack ath11k's board-2.bin by hand (ath11k-bdencoder needs a JSON manifest;
+  qca-swiss-army-knife tools/scripts/ath11k/ath11k-bdencoder):
+    ath11k-bdencoder -c board.json -o board-2.bin
+  with one entry per file in wifi-board/, named for the device tree's
+  calibration variant, then install to
+    /lib/firmware/ath11k/WCN6750/hw1.0/board-2.bin
+  Until then ath11k uses linux-firmware's generic board-2.bin (the
+  Qualcomm_rb3gen2 data): WiFi works, radio calibration is generic.
+  The board data is factory radio calibration: never commit or share it.
+NOTE
+else
+  say "No bdwlan/regdb found in the FAT partitions; ath11k keeps linux-firmware's generic board-2.bin"
+fi
+
+# --- 7) manifest and summary --------------------------------------------------
+manifest=$OUT/spacewar-firmware.sha256
+rm -f "$manifest"
+while IFS= read -r f; do
+  printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "${f#"$OUT"/}" >> "$manifest"
+done < <(find "$OUT/$DEST_REL" "$OUT/$HEX_DIR" -type f 2>/dev/null | sort)
+say "Staged in $OUT ($(find "$OUT/$DEST_REL" "$OUT/$HEX_DIR" -type f 2>/dev/null | wc -l) files, checksums in $manifest)"
+[[ $missing == 0 ]] || die "some remoteproc firmware is missing from this image (see MISSING above); a full OTA carries all partitions"
+echo "This is Qualcomm's and Nothing's proprietary firmware from your own image. Do not redistribute it."
