@@ -274,7 +274,7 @@
 +}
 --- /dev/null
 +++ b/shell/plugins/lock/LockGlance.qml
-@@ -0,0 +1,624 @@
+@@ -0,0 +1,625 @@
 +import QtQuick
 +import Quickshell
 +import Quickshell.Io
@@ -758,6 +758,7 @@
 +              // swipe (the card's own finishSwipe decides where it ends)
 +              // and forgets a card swiped off its side.
 +              onImplicitHeightChanged: Qt.callLater(glance.refit)
++              onDismissed: glance.dismiss(modelData.file)
 +            }
 +          }
 +
@@ -901,7 +902,7 @@
 +}
 --- /dev/null
 +++ b/shell/plugins/lock/LockGlanceCard.qml
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,202 @@
 +// A notification card for the lock's glance view: a static summary of a
 +// stored row (the app, the summary, the body capped at a few lines, the
 +// age), with the swipe-to-dismiss math of the toasts (0017's finishSwipe)
@@ -939,6 +940,8 @@
 +  property real swipeOffset: 0
 +  property real swipeVelocity: 0
 +  property bool dismissing: false
++  // A swipe that carried the card off its side: the owner forgets it.
++  signal dismissed()
 +
 +  function finishSwipe() {
 +    var distance = Math.abs(swipeOffset)
@@ -1087,6 +1090,7 @@
 +      script: {
 +        if (!swipeAnimation.dismiss) return
 +        card.dismissing = true
++        card.dismissed()
 +        swipeResetTimer.restart()
 +      }
 +    }

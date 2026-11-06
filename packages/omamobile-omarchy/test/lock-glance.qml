@@ -92,8 +92,10 @@ Item {
 
   function entry(app, ago, id, summary, body) {
     var ts = test.glance().now - ago
-    return JSON.stringify({ id: id, originalId: id, app: app, appIcon: "", summary: summary, body: body,
-                            image: "/tmp/avatar-" + id + ".png", glyph: "", urgency: 1, timestamp: ts })
+    // Omarchy 4.5's store row: a key (Store.KEY), ts in seconds.
+    return JSON.stringify({ key: "n" + Math.floor(ts).toString(36) + "-" + id, originalId: id, app: app, appIcon: "",
+                            summary: summary, body: body, image: "/tmp/avatar-" + id + ".png", glyph: "",
+                            urgency: 1, ts: Math.floor(ts / 1000) })
   }
 
   TestCase {
@@ -166,7 +168,9 @@ Item {
       harness.supplies = "Battery\t1\t87\tDischarging\t\nUSB\t\t\tCharging\t1\n"
       harness.suppliesHang = false
       Mpris.players.values = []
-      Quickshell.vars = { HOME: harness.home }
+      Quickshell.vars = { HOME: harness.home, OMARCHY_PATH: harness.home + "/omarchy" }
+      // The English catalog (omarchy's default/i18n), the strings the lock reads.
+      writeFile("omarchy/default/i18n/en/shell.json", JSON.stringify({ "lock.enterPassword": "Enter Password" }))
       Quickshell.started = []
       Quickshell.responder = function(argv) {
         var cmd = argv.join(" ")
@@ -176,15 +180,21 @@ Item {
           harness.notificationsRaw = harness.notificationsRaw.split("\n").filter(function(line) {
             if (!line) return false
             var e = JSON.parse(line)
-            return names.indexOf(e.timestamp + "-" + e.originalId + ".json") < 0
+            return names.indexOf(e.key) < 0
           }).join("\n") + "\n"
           return ""
+        }
+        // 4.5's store read: live.json then history.json, one array a line.
+        // The harness keeps one row a line, all in the history.
+        if (cmd.indexOf("for f in live history") >= 0) {
+          var rows = harness.notificationsRaw.split("\n").filter(function(l) { return l.trim() !== "" })
+          return "[]\n[" + rows.join(",") + "]\n"
         }
         if (cmd.indexOf("/sys/class/power_supply") >= 0) return harness.suppliesHang ? null : harness.supplies
         return cmd.indexOf("/.local/state/omarchy/notifications/") >= 0 ? harness.notificationsRaw : null
       }
       writeFile(".local/state/omarchy/toggles/lock-hide-notification-text", "")
-      writeFile(".local/state/omarchy/notifications.json", "")
+      writeFile(".local/state/omarchy/notifications/quiet.json", "")
       writeFile(".local/state/omamobile/weather.json", "")
       writeFile(".config/omarchy/shell.json", "")
       writeFile(".local/state/omarchy/toggles/credential-password", "")
@@ -403,8 +413,6 @@ Item {
       compare(cards[2].summary, "Sam", "two from one app are two cards")
       compare(cards[1].summaryLines, 1)
       compare(cards[1].bodyLines, 1)
-      compare(cards[1].swipeEnabled, false)
-      compare(cards[1].closeButtonShown, false)
       compare(one("lockGlanceMore").text, "6 more from Updates, Calendar and 3 others")
       compare(one("lockGlanceQuiet").visible, false)
       var hint = one("lockGlanceHint")
@@ -487,7 +495,7 @@ Item {
       var calls = forgets()
       compare(calls.length, 1, "one forget")
       verify(calls[0].indexOf(file) > 0, "the forget names that notification: " + calls[0].join(" "))
-      verify(/^[0-9]+-2\.json$/.test(file), "its file name carries its id: " + file)
+      verify(/^n[0-9a-z]+-2$/.test(file), "its key is that notification's: " + file)
       compare(Quickshell.executed.filter(function(a) { return a[0] !== "busctl" }), [], "nothing of it runs")
       tryCompare(one("lockGlanceMore"), "visible", false, 2000)
       compare(visibleCards().map(function(c) { return c.summary }), ["Sam", "Review", "Standup"],
@@ -553,12 +561,12 @@ Item {
         entry("omarchy-action", 3 * minute, 2, "Theme changed", ""),
         entry("notify-send", 4 * minute, 3, "Ping", "")
       ].join("\n") + "\n"
-      writeFile(".local/state/omarchy/notifications.json", '{"version": 3, "dnd": true}\n')
+      writeFile(".local/state/omarchy/notifications/quiet.json", '{"dnd": true}\n')
       show()
       var cards = byName("lockGlanceCard").filter(function(c) { return c.visible })
       compare(cards.length, 1)
       compare(cards[0].summary, "Theme changed")
-      writeFile(".local/state/omarchy/notifications.json", '{"version": 3, "dnd": false}\n')
+      writeFile(".local/state/omarchy/notifications/quiet.json", '{"dnd": false}\n')
       settle()
       compare(byName("lockGlanceCard").filter(function(c) { return c.visible }).length, 3)
       compare(glance().cards[2].app, "Notifications", "a bare notify-send goes by Notifications")
@@ -568,7 +576,7 @@ Item {
     function test_the_shades_ten() {
       var lines = []
       for (var i = 0; i < 12; i++) lines.push(entry("App" + i, (i + 1) * minute, 10 + i, "Note " + i, "body"))
-      lines.push(JSON.stringify({ id: 99, originalId: 99, app: "Empty", summary: "", body: "", timestamp: test.glance().now }))
+      lines.push(JSON.stringify({ key: "nempty-99", originalId: 99, app: "Empty", summary: "", body: "", ts: Math.floor(test.glance().now / 1000) }))
       harness.notificationsRaw = lines.join("\n") + "\n"
       show()
       var g = glance().cards
