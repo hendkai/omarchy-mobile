@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Snailberg port for spacewar (Nothing Phone 1)
+#
+# qrtr: the userspace side of Qualcomm's IPC Router (net/qrtr). libqrtr (the
+# QRTR socket helpers), qrtr-ns (the name service daemon every remote
+# processor user - pd-mapper, rmtfs, hexagonrpcd, ModemManager - needs to
+# resolve services) and the qrtr lookup tool. Arch package of postmarketOS'
+# qrtr (same source commit as pmaports' APKBUILD, 9dc7a885): upstream's
+# `make install` ships the systemd unit (qrtr-ns.service) natively, so unlike
+# the OpenRC APKBUILD nothing is removed here.
+pkgname=qrtr
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Userspace reference for net/qrtr in the Linux kernel: libqrtr, qrtr-ns and the lookup tool"
+arch=(aarch64)
+url="https://github.com/andersson/qrtr"
+license=(BSD-3-Clause)
+depends=()
+makedepends=()
+source=("qrtr-9dc7a88548c27983e06465d3fbba2ba27d4bc050.tar.gz::https://github.com/andersson/qrtr/archive/9dc7a88548c27983e06465d3fbba2ba27d4bc050.tar.gz")
+sha256sums=(756ac22024207ec21b6bf034fba97b82b80adb859c626ac84213850fe5e136dd)
+
+build() {
+  make prefix=/usr -C "$srcdir/qrtr-9dc7a88548c27983e06465d3fbba2ba27d4bc050" all
+}
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  make prefix=/usr DESTDIR="$pkgdir" -C "$srcdir/qrtr-9dc7a88548c27983e06465d3fbba2ba27d4bc050" install
+  install -Dm644 "$srcdir/qrtr-9dc7a88548c27983e06465d3fbba2ba27d4bc050/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}

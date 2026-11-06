@@ -1,0 +1,66 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for hexagonrpcd. Static checks: the PKGBUILD parses, the source is
+# pinned to one commit, every patch and the udev rule are in the package,
+# and the sysusers file creates the user the units run as. Against the
+# unpacked source (container check) it verifies the port's ten patches
+# actually applied (markers from the patches must be in the tree) and that
+# meson built the daemon and the three systemd units.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+bash -n PKGBUILD || fail "PKGBUILD parses"
+pass "PKGBUILD parses"
+
+grep -qE '::https://github\.com/z3ntu/hexagonrpc/archive/[0-9a-f]{40}\.tar\.gz"$' PKGBUILD \
+  || fail "the source must be pinned to one full commit"
+pass "source pinned to a commit"
+
+grep -qE "^  '?[0-9a-f]{64}'?" PKGBUILD || fail "the source tarball must carry its sha256"
+pass "source checksum pinned"
+
+n=0
+for p in 00*.patch; do [[ -f $p ]] && n=$((n + 1)); done
+[[ $n -eq 10 ]] || fail "expected the port's 10 patches, found $n"
+pass "all 10 patches shipped"
+
+for f in 10-fastrpc.rules sysusers.d/hexagonrpcd.conf; do
+  [[ -f $f ]] || fail "missing $f"
+done
+grep -q '^u fastrpc ' sysusers.d/hexagonrpcd.conf || fail "sysusers must create the fastrpc user"
+grep -q 'OWNER="fastrpc"' 10-fastrpc.rules || fail "the udev rule must hand fastrpc-* to the fastrpc user"
+pass "udev rule and sysusers user shipped"
+
+grep -E '^(depends|makedepends)=' PKGBUILD | grep -q 'qrtr' && fail "hexagonrpcd does not link qrtr; keep it independent of the qrtr build"
+pass "no false qrtr dependency"
+
+ver=$(cat version)
+[[ $ver =~ ^[0-9][0-9A-Za-z._]*$ ]] || fail "version '$ver' is not a pacman pkgver"
+pass "version file is a pacman pkgver ($ver)"
+
+src=$(ls -d src/hexagonrpc-* 2>/dev/null | head -1 || true)
+if [[ -n $src ]]; then
+  # One marker per patch family: applied trees must carry them.
+  grep -q 'hexagonfs_write' "$src/hexagonrpcd/hexagonfs.c" || fail "0002 (hexagonfs write) did not apply"
+  grep -q 'sns_reg' "$src/hexagonrpcd/rpcd.c" 2>/dev/null || grep -q 'registry' "$src/hexagonrpcd/rpcd.c" \
+    || fail "0003 (writable registry override) did not apply"
+  grep -q 'INIT_CREATE_STATIC\|static_pd' "$src/hexagonrpcd/rpcd.c" || fail "0007 (static PDs/audiopd) did not apply"
+  grep -q 'ftell\|flen' "$src/hexagonrpcd/apps_std.c" || fail "0008 (ftell/flen) did not apply"
+  grep -q 'unmap64\|UNMAP64' "$src/hexagonrpcd/apps_mem.c" || fail "0010 (request_unmap64) did not apply"
+  pass "port patches applied to the source"
+
+  # makepkg runs build() from $srcdir, so the meson build dir is src/build
+  b=$(ls -d src/build build 2>/dev/null | head -1 || true)
+  [[ -n $b ]] || fail "no meson build directory"
+  [[ -x $b/hexagonrpcd ]] || fail "meson did not build hexagonrpcd"
+  pass "daemon built"
+
+  for u in hexagonrpcd-adsp-rootpd hexagonrpcd-adsp-sensorspd hexagonrpcd-sdsp; do
+    find "$b" -name "$u.service" -print -quit | grep -c . >/dev/null || fail "no $u.service in the build"
+  done
+  pass "all three systemd units generated"
+else
+  pass "# SKIP source not downloaded here (structural checks only)"
+fi

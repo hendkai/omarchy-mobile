@@ -1,0 +1,38 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for qrtr. Static checks: the PKGBUILD parses, the source is pinned
+# to one commit with its checksum, and the version file is a pacman version.
+# (Upstream has no test suite; postmarketOS builds it with !check too.)
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+bash -n PKGBUILD || fail "PKGBUILD parses"
+pass "PKGBUILD parses"
+
+grep -qE '::https://github\.com/andersson/qrtr/archive/[0-9a-f]{40}\.tar\.gz"\)$' PKGBUILD \
+  || fail "the source must be pinned to one full commit"
+pass "source pinned to a commit"
+
+sums=$(sed -n '/^sha256sums=/,/^)/p' PKGBUILD | grep -cE '[0-9a-f]{64}') 
+[[ $sums -ge 1 ]] || fail "sha256sums must cover the source"
+pass "checksums present ($sums)"
+
+ver=$(cat version)
+[[ $ver =~ ^[0-9][0-9A-Za-z._]*$ ]] || fail "version '$ver' is not a pacman pkgver"
+pass "version file is a pacman pkgver ($ver)"
+
+# What make install has to keep delivering (upstream Makefile): the library,
+# its header, the daemon and the generated systemd unit. Checked against the
+# unpacked source when it is here (the container check, after makepkg
+# downloaded it); skipped on a host without the sources.
+src=$(ls -d src/qrtr-* 2>/dev/null | head -1 || true)
+if [[ -n $src ]]; then
+  grep -q 'libqrtr' "$src/Makefile" || fail "upstream stopped building libqrtr"
+  grep -q 'libqrtr\.h' "$src/Makefile" || fail "upstream stopped installing the header"
+  grep -q 'qrtr-ns\.service' "$src/Makefile" || fail "upstream stopped shipping qrtr-ns.service"
+  pass "upstream still installs lib, header, daemon and unit"
+else
+  pass "# SKIP source not downloaded here (structural checks only)"
+fi

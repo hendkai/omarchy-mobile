@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# /dev/fastrpc-* is created by the kernel's fastrpc char driver; the shipped
+# systemd units run hexagonrpcd as the fastrpc user, so the node must be
+# owned by it before the daemon starts (same rule as postmarketOS').
+SUBSYSTEM=="misc", KERNEL=="fastrpc-*", OWNER="fastrpc", GROUP="fastrpc", MODE="600"

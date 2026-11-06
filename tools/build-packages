@@ -41,6 +41,10 @@
 # with --all (so a prebuilt/ staged for a test is never published as a side
 # effect), and only after `packages/linux-omamobile/stage --verify` confirms
 # the staged build is a kernel-<date> tag on the published omamobile branch.
+# linux-omamobile-spacewar is the spacewar port's local-only counterpart
+# (sc7280-mainline tree, never published): same named-only rule, and its
+# ./stage --verify checks the staging's checksums and artifact magics
+# instead of a published tag.
 #
 # A device package that ships boot files (its install reads
 # OMAMOBILE_BOOT_FILES) refuses to build without its boot-files/; before it
@@ -56,7 +60,7 @@ source tools/lib/alarm.sh
 
 SLOW=(mesa hyprland libcamera)
 # Packed from a staged kernel build: built only when named (see above)
-NAMED_ONLY=(linux-omamobile)
+NAMED_ONLY=(linux-omamobile linux-omamobile-spacewar)
 repo=out/repo/aarch64
 # Exit 3 means exactly "built and signed everything but the skipped device
 # packages", which <repo>/../.skipped then lists: any other exit with 3 (a
@@ -86,6 +90,7 @@ done
 # Default order: dependencies of our own packages first (check() of a later
 # package can then install an earlier one from the repository being built).
 ORDER=(omamobile-keyring libfprint neard omacam omamobile-apps omamobile-device-cheetah omamobile-device-felix omamobile-device-lynx omamobile-device-raven omamobile-device-panther omamobile-audio
+       qrtr pd-mapper hexagonrpcd
        omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-mirror omamobile-omarchy omamobile-owl-widgets omamobile-shell
        omamobile-modem omamobile-modem-sit omamobile-mmd omamobile-speaker-tuning omamobile-waydroid
        omamobile-firstboot omamobile-boot-update linux-omamobile mesa hyprland libcamera)

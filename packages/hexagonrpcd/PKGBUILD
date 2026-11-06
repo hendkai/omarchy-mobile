@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Snailberg port for spacewar (Nothing Phone 1)
+#
+# hexagonrpcd: the FastRPC daemon that serves the Hexagon remote processors
+# (ADSP root PD / sensors PD, SDSP) over /dev/fastrpc-*. Arch package of the
+# z3ntu/hexagonrpc fork at 9f98797 that postmarketOS device ports build (the
+# same source and the same ten patches as the spacewar pmaports reference):
+# PR #21 (apps_std fwrite support) plus the sensor-registry, audiopd and
+# apps_mem fixes carried on top. The Qualcomm path: qrtr-ns + pd-mapper +
+# hexagonrpcd; NOT omamobile-modem-sit (that is the Samsung-IPC Pixel way).
+#
+# The fork's meson installs the three systemd units (adsp-rootpd,
+# adsp-sensorspd, sdsp) natively via data/meson.build; this package adds the
+# fastrpc user (sysusers.d) and the udev rule that hands /dev/fastrpc-* to
+# it, like the OpenRC APKBUILD's pre-install + rules do.
+pkgname=hexagonrpcd
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Qualcomm HexagonFS/FastRPC daemon for the ADSP and SDSP remote processors (z3ntu fork with sensor-registry support)"
+arch=(aarch64)
+url="https://github.com/z3ntu/hexagonrpc"
+license=(GPL-3.0-or-later)
+depends=(systemd)
+makedepends=(meson)
+source=(
+  "hexagonrpc-9f987970f9bc3e72081b7966a1f4e766ce6af6f7.tar.gz::https://github.com/z3ntu/hexagonrpc/archive/9f987970f9bc3e72081b7966a1f4e766ce6af6f7.tar.gz"
+  "10-fastrpc.rules"
+  "0001-apps_std-fix-strerror-using-wrong-error-source.patch"
+  "0002-hexagonfs-add-read-write-support.patch"
+  "0003-add-writable-sensor-registry-directory-override.patch"
+  "0004-listener-increase-inbuf-capacity.patch"
+  "0005-apps_std-implement-frename.patch"
+  "0006-listener-dont-kill-connection-on-unsupported-call.patch"
+  "0007-rpcd-create-static-PDs-audiopd.patch"
+  "0008-apps_std-implement-ftell-and-flen.patch"
+  "0009-apps_mem-log-map-requests-and-pass-remote-heap-ones.patch"
+  "0010-apps_mem-implement-request_unmap64.patch"
+)
+sha256sums=(
+  'a4997d8a09eea46112fbe2289ad87198baa0ada9ca510c4363a85f21122363bf'
+  'cd8647a74751650057a7b8acecd9081549206dc9b5db8bb5ce19000fc9017129'
+  '580ae9123e6b5944b3e6fc2fbed6854e4aa546b0590489293711ccd8a3eaf2bd'
+  'd5753c99c54fc54c2e22e73785a0e7902a23aad0742aea56735043e088406f70'
+  'f87298fa60e54e9faaa0bb1de755873411134b2592ca8c70d1b8a39c7548d380'
+  'c7360501cf8df582c35f0a1f97cd075ad3d10830177d2ab29b556c37b32fea38'
+  'e60f7ec994019b799188f46fd2e4345f83a83b42955d9d2d7a8ad205a2de89d2'
+  '5e31ff78731e1419f8ddaf8d859c388b2d88e45a0a2f087d8bd10e049f5c3cee'
+  '771184d1cf8d296f7ac5fa44026c330a71c0519c08de2d1d30aa28620f631e1b'
+  '10c7511c9a0772039049b744407e064d2bfb83176747380b929b4ed6b8f0b530'
+  '70dd920ff4b88e3cd2c0dff2e78f7c8ff2dfb0e9d78199c978e8946b7e836d70'
+  '16f0e846970e99b8a4f7181ca1eafba5b6b860f8ae6ec8ba475b32e329e1ca2f'
+)
+
+prepare() {
+  cd "$srcdir/hexagonrpc-9f987970f9bc3e72081b7966a1f4e766ce6af6f7"
+  local p
+  for p in "$startdir"/00*.patch; do
+    patch -p1 --silent < "$p"
+  done
+}
+
+build() {
+  meson setup --prefix=/usr -Db_lto=true "$srcdir/hexagonrpc-9f987970f9bc3e72081b7966a1f4e766ce6af6f7" build
+  meson compile -C build
+}
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  DESTDIR="$pkgdir" meson install --no-rebuild -C build
+  install -Dm644 "$srcdir/10-fastrpc.rules" "$pkgdir/usr/lib/udev/rules.d/10-fastrpc.rules"
+  install -Dm644 "$startdir/sysusers.d/hexagonrpcd.conf" "$pkgdir/usr/lib/sysusers.d/hexagonrpcd.conf"
+}

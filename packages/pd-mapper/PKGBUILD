@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Snailberg port for spacewar (Nothing Phone 1)
+#
+# pd-mapper: Qualcomm's protection domain mapper. Every sc7280 remoteproc
+# (modem, ADSP, CDSP) waits for its service at boot, so the board needs the
+# daemon beside qrtr-ns and hexagonrpcd. Same source commit as postmarketOS'
+# APKBUILD (d7fe25f); upstream's `make install` ships pd-mapper.service
+# natively. Links against libqrtr from our qrtr package (build qrtr first).
+pkgname=pd-mapper
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Qualcomm protection domain mapper (serves the PD map over QRTR that the sc7280 remoteprocs wait for)"
+arch=(aarch64)
+url="https://github.com/andersson/pd-mapper"
+license=(BSD-3-Clause)
+depends=(qrtr)
+makedepends=()
+source=("pd-mapper-d7fe25fa6eff2e62cf264544adee9e8ca830dc78.tar.gz::https://github.com/andersson/pd-mapper/archive/d7fe25fa6eff2e62cf264544adee9e8ca830dc78.tar.gz")
+sha256sums=(f7a77b344307842365954ff995a2e979e791ec1f433d7cc4a3e28642ab324a65)
+
+build() {
+  make prefix=/usr -C "$srcdir/pd-mapper-d7fe25fa6eff2e62cf264544adee9e8ca830dc78"
+}
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  make prefix=/usr DESTDIR="$pkgdir" -C "$srcdir/pd-mapper-d7fe25fa6eff2e62cf264544adee9e8ca830dc78" install
+  install -Dm644 "$srcdir/pd-mapper-d7fe25fa6eff2e62cf264544adee9e8ca830dc78/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}

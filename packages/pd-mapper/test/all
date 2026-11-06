@@ -1,0 +1,37 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for pd-mapper. Static checks: the PKGBUILD parses, the source is
+# pinned to one commit with its checksum, the package depends on our qrtr
+# (it links -lqrtr). Against the unpacked source (container check) it
+# verifies the link line and the shipped systemd unit.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+bash -n PKGBUILD || fail "PKGBUILD parses"
+pass "PKGBUILD parses"
+
+grep -qE '::https://github\.com/andersson/pd-mapper/archive/[0-9a-f]{40}\.tar\.gz"\)$' PKGBUILD \
+  || fail "the source must be pinned to one full commit"
+pass "source pinned to a commit"
+
+sums=$(sed -n '/^sha256sums=/,/^)/p' PKGBUILD | grep -cE '[0-9a-f]{64}')
+[[ $sums -ge 1 ]] || fail "sha256sums must cover the source"
+pass "checksums present ($sums)"
+
+grep -qE '^depends=\((.* )?qrtr( .*)?\)$' PKGBUILD || fail "pd-mapper must depend on qrtr (links libqrtr)"
+pass "depends on qrtr"
+
+ver=$(cat version)
+[[ $ver =~ ^[0-9][0-9A-Za-z._]*$ ]] || fail "version '$ver' is not a pacman pkgver"
+pass "version file is a pacman pkgver ($ver)"
+
+src=$(ls -d src/pd-mapper-* 2>/dev/null | head -1 || true)
+if [[ -n $src ]]; then
+  grep -q -- '-lqrtr' "$src/Makefile" || fail "upstream stopped linking libqrtr"
+  grep -q 'pd-mapper.service' "$src/Makefile" || fail "upstream stopped shipping pd-mapper.service"
+  pass "upstream still links qrtr and ships the unit"
+else
+  pass "# SKIP source not downloaded here (structural checks only)"
+fi
