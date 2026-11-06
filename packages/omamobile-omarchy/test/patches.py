@@ -1001,7 +1001,9 @@ def lock_fingerprint_probe(t, root):
     ok("grep -qi finger" not in script, "real omarchy: omarchy-apply-lock no longer greps for 'finger' (0022)")
     script = script.replace("/usr/bin/fprintd-list", os.path.join(fakes, "fprintd-list")).replace("/etc/pam.d/", pam + "/") \
                    .replace("/usr/lib/systemd/system-sleep/", sysd_sleep + "/") \
-                   .replace("/etc/systemd/system/fprintd.service.d/", sysd_etc + "/")
+                   .replace("/etc/systemd/system/fprintd.service.d/", sysd_etc + "/") \
+                   .replace("export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin",
+                            ": # test: as root (a container) keep the fakes on PATH")
     tool = os.path.join(d, "omarchy-apply-lock")
     with open(tool, "w") as f:
         f.write(script)
@@ -1015,6 +1017,8 @@ def lock_fingerprint_probe(t, root):
         with open(fpam, "w") as f:
             f.write("kept\n")
         for f in (hook, conf):
+            # the no-fingers branch rmdirs the emptied drop-in directory
+            os.makedirs(os.path.dirname(f), exist_ok=True)
             with open(f, "w") as fh:
                 fh.write("kept\n")
         set_answer(text, rc)
