@@ -11,6 +11,7 @@ QtObject {
   property var stdout: null
   property var stderr: null
   property var environment: ({})
+  property bool stdinEnabled: false
   signal exited(int exitCode, int exitStatus)
 
   onRunningChanged: {

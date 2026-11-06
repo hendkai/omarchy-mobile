@@ -345,31 +345,32 @@ def real_package(t):
     notif = "usr/share/omarchy/shell/plugins/notifications/"
     ok("inlineReplySupported: true" in read(root, notif + "Service.qml")
        and "sendInlineReply" in read(root, notif + "Service.qml")
-       and "notificationReplyField" in read(root, notif + "components/NotificationCard.qml"),
+       and "notificationReplyField" in read(root, notif + "Toast.qml"),
        "real omarchy: notifications take an inline reply (0015)")
-    card = read(root, notif + "components/NotificationCard.qml")
+    card = read(root, notif + "Toast.qml")  # 4.5: the deck of Toast cards
     service = read(root, notif + "Service.qml")
-    ok("DragHandler {\n    id: swipeHandler" in card and "yAxis.enabled: false" in card
-       and "dragThreshold:" in card and "root.width * 0.35" in card
-       and "root.closeRequested()" in card.split("function finishSwipe", 1)[1]
-       and "!root.replying" in card.split("id: swipeHandler", 1)[1].split("}", 1)[0],
+    ok("DragHandler {\n      id: swipeHandler" in card and "yAxis.enabled: false" in card
+       and "dragThreshold:" in card and "width * 0.35" in card.split("function finishSwipe", 1)[1].split("\n  }", 1)[0]
+       and "swipeAnimation.dismiss = true" in card.split("function finishSwipe", 1)[1].split("\n  }", 1)[0]
+       and "enabled: card.swipeEnabled && !card.replying && !card.dismissing" in card,
        "real omarchy: a toast swipes away past 35%, not while a reply is typed (0017)")
     ok('objectName: "notificationCloseButton"' in card and "width: Style.space(44)" in card
-       and "height: Style.space(44)" in card and "visible: root.closeButtonShown" in card,
+       and "height: Style.space(44)" in card and "visible: card.closeButtonShown" in card,
        "real omarchy: a 44 px close button on toasts (0017)")
-    ok("acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus" in card
-       and "mouse.button === Qt.RightButton" in card,
-       "real omarchy: hover pauses for a mouse only; right-click still closes (0017)")
-    ok("!card.held" in service and "closeButtonShown: service.touchScreen" in service
+    ok("acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton" in card
+       and "if (!card.replying) card.activated()" in card and "} else card.dismissed()" in card,
+       "real omarchy: a tap beside an open reply does nothing, any other click closes (0017)")
+    ok("hoverX: service.hoverX" in service and "closeButtonShown: service.touchScreen" in service
        and '["hyprctl", "-j", "devices"]' in service and "touchScreenProc.running = true" in service,
-       "real omarchy: the close button shows when Hyprland lists a touch screen (0017)")
+       "real omarchy: the deck owns hover, the close button shows when Hyprland lists a touch screen (0017)")
     forget = service.split("function forgetNotification(name) {", 1)
+    seg = forget[1].split("\n  }\n", 1)[0] if len(forget) == 2 else ""
     ok(len(forget) == 2 and "function forget(name: string): string {\n      return service.forgetNotification(name)" in service
-       and "/^[0-9]+-[0-9]+\\.json$/.test(file)" in forget[1].split("\n  }\n", 1)[0]
-       and 'removePopup(i, "forget")' in forget[1].split("\n  }\n", 1)[0]
-       and "enqueuePopupFileJob(" in forget[1].split("\n  }\n", 1)[0]
-       and 'if (reason === "forget") deletePopupFileFor(entry)\n      else archivePopupFileFor(entry)' in service,
-       "real omarchy: forget takes one notification away, toast or history, on the file queue (0019)")
+       and 'closeToast(key, "forget")' in seg
+       and 'if (String(historyEntries[i].key) !== key) kept.push(historyEntries[i])' in seg
+       and 'saveSoon("history")' in seg
+       and 'reason !== "forget") storeClose(key, reason)' in service,
+       "real omarchy: forget takes one notification away, toast or history, never into history again (0019)")
     menu = read(root, "usr/share/omarchy/shell/plugins/menu/Menu.qml")
     back = menu.split("DragHandler {\n        id: backSwipe", 1)
     ok(len(back) == 2 and "yAxis.enabled: false" in back[1].split("}", 1)[0]
@@ -379,7 +380,7 @@ def real_package(t):
        and 'root.activeMenu !== "root" && !root.dmenuActive' in menu
        and menu.split('objectName: "menuBackButton"', 1)[1].count("onClicked: root.goBack()") >= 1,
        "real omarchy: the menu's header has a back button below the top level (0018)")
-    ok("(event.key === Qt.Key_Backspace || event.key === Qt.Key_Left) && !root.filterText) {\n            root.goBack()" in menu,
+    ok("(event.key === Qt.Key_Backspace || Util.readingKey(event) === Qt.Key_Left) && !root.filterText) {\n            root.goBack()" in menu,
        "real omarchy: Backspace and Left still go back (0018)")
     # The menu-first-frame bridge is dropped on the 4.5 line: its menu is an
     # OverlayWindow, transparent until sized and scaled (upstream's own fix).
@@ -482,7 +483,11 @@ def app_icons_largest(root):
              "/usr/share/icons/hicolor/64x64/apps/foot.png",
              "/usr/share/pixmaps/odd.png",
              "/usr/share/icons/hicolor/24x24/apps/odd.png"]
-    p = subprocess.run(["node", "-e", js, "--"] + paths, capture_output=True, text=True)
+    node = shutil.which("node")
+    if not node:
+        print("ok - real omarchy: the icon index keeps the largest size, an SVG over any PNG (0024) # SKIP no node")
+        return
+    p = subprocess.run([node, "-e", js, "--"] + paths, capture_output=True, text=True)
     got = json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else {}
     ok(got.get("chromium", "").endswith("/256x256/apps/chromium.png")
        and got.get("foot", "").endswith("/scalable/apps/foot.svg")
@@ -496,25 +501,26 @@ def lock_glance(root):
     lock = "usr/share/omarchy/shell/plugins/lock/"
     view = read(root, lock + "LockView.qml")
     service = read(root, lock + "Service.qml")
-    card = read(root, "usr/share/omarchy/shell/plugins/notifications/components/NotificationCard.qml")
+    card = read(root, lock + "LockGlanceCard.qml")  # 4.5: the glance carries its own card
     ok(os.path.isfile(os.path.join(root, lock + "LockGlance.qml")) and os.path.isfile(os.path.join(root, lock + "LockGlance.js"))
        and "LockGlance {\n      id: glance" in view,
        "real omarchy: the lock has a glance view (0023)")
     ok(view.count("opacity: root.pinOpacity") == 4 and view.count("&& root.pinVisible") == 3 and "visible: root.pinVisible" in view,
        "real omarchy: every part of the PIN view hides under the glance (0023)")
     wake = service.split("function wake(): string {", 1)
+    dark = service.split("function dark(): string {", 1)
     ok(len(wake) == 2 and "root.wakeSerial += 1" in wake[1].split("}", 1)[0]
        and "wakeSerial: root.wakeSerial" in service,
        "real omarchy: the wake call brings the glance back (0023)")
+    ok(len(dark) == 2 and "root.markDark()" in dark[1].split("}", 1)[0],
+       "real omarchy: the dark call marks it dark for the glance, as the keys and sleepd call it (0023)")
     blank = service.split("function runBlank() {", 1)
-    dark = service.split("function dark(): string {", 1)
     run_wake = service.split("function runWake() {", 1)
     ok(len(blank) == 2 and "markDark()" in blank[1].split("}", 1)[0]
-       and len(dark) == 2 and "root.markDark()" in dark[1].split("}", 1)[0]
        and len(run_wake) == 2 and "displayDark = false" in run_wake[1].split("}", 1)[0]
        and "blankSerial: root.blankSerial" in service and "displayDark: root.displayDark" in service,
        "real omarchy: the lock's blank and the dark call bring the glance back, a wake lights it (0023)")
-    ok("maximumLineCount: root.summaryLines" in card and "maximumLineCount: root.bodyLines" in card
+    ok("maximumLineCount: card.summaryLines" in card and "maximumLineCount: card.bodyLines" in card
        and "property int summaryLines: 2" in card and "property int bodyLines: 3" in card,
        "real omarchy: notification toasts keep their line counts (0023)")
     glance = read(root, lock + "LockGlance.qml") + read(root, lock + "LockGlance.js")
@@ -828,6 +834,12 @@ def notification_phrasing(t, patched, original):
     """Patch 0020's phrasing, with a stub busctl that records the summary
     and body: a phone rewords each Omarchy text above, and a desktop sends
     exactly what the unpatched script sends."""
+    if not shutil.which("jq"):
+        # omarchy-notification-send pipes through jq; the plain build image
+        # carries no jq (a full run uses the qt test image).
+        print("ok - 0020: a phone gets tap wording and no Super hints # SKIP no jq")
+        print("ok - 0020: a desktop sends exactly what unpatched Omarchy sends # SKIP no jq")
+        return
     fakes = os.path.join(t, "notify-fakes")
     os.makedirs(fakes)
     with open(os.path.join(fakes, "busctl"), "w") as f:
@@ -914,10 +926,37 @@ def lock_fingerprint_probe(t, root):
         f.write('#!/bin/bash\nexec "$@"\n')
     # Never the laptop's running shell
     with open(os.path.join(fakes, "omarchy-shell"), "w") as f:
-        f.write('#!/bin/bash\nexit 1\n')
-    for n in ("fprintd-list", "sudo", "omarchy-shell"):
+        f.write("#!/bin/bash\nexit 1\n")
+    # Omarchy 4.5's omarchy-apply-lock installs the fprintd resume hook and
+    # the stop-timeout drop-in alongside the fingerprint PAM file (upstream
+    # 879d6583d): give it a scratch OMARCHY_PATH carrying those two files, a
+    # fake install that drops the root chown (the test runs as a user), and a
+    # fake systemctl (no systemd in a container).
+    omarchy = os.path.join(d, "omarchy")
+    sleep_hook = os.path.join(omarchy, "default/systemd/system-sleep/fprintd-resume")
+    stop_conf = os.path.join(omarchy, "default/systemd/system/fprintd.service.d/10-stop-timeout.conf")
+    for f in (sleep_hook, stop_conf):
+        os.makedirs(os.path.dirname(f), exist_ok=True)
+        with open(f, "w") as fh:
+            fh.write("hook-src\n")
+    sysd_sleep = os.path.join(d, "systemd-sleep")
+    sysd_etc = os.path.join(d, "systemd-system/fprintd.service.d")
+    os.makedirs(sysd_sleep)
+    os.makedirs(sysd_etc)
+    with open(os.path.join(fakes, "systemctl"), "w") as f:
+        f.write("#!/bin/bash\nexit 0\n")
+    with open(os.path.join(fakes, "install"), "w") as f:
+        f.write("#!/bin/bash\nout=(); skip=0\n"
+                "for a in \"$@\"; do\n"
+                "  if (( skip )); then skip=0; continue; fi\n"
+                "  case $a in -o|-g) skip=1; continue;; esac\n"
+                "  out+=(\"$a\")\n"
+                "done\n"
+                "exec /usr/bin/install \"${out[@]}\"\n")
+    for n in ("fprintd-list", "sudo", "omarchy-shell", "systemctl", "install"):
         os.chmod(os.path.join(fakes, n), 0o755)
-    env = dict(os.environ, PATH=fakes + ":/usr/bin:/bin", USER="tester", OMARCHY_INSTALL_USER="tester")
+    env = dict(os.environ, PATH=fakes + ":/usr/bin:/bin", USER="tester", OMARCHY_INSTALL_USER="tester",
+               OMARCHY_PATH=omarchy)
 
     def set_answer(text, rc=0):
         with open(answer, "w") as f:
@@ -960,24 +999,34 @@ def lock_fingerprint_probe(t, root):
     # omarchy-apply-lock, with /etc/pam.d and /usr/bin/fprintd-list moved
     script = read(root, "usr/bin/omarchy-apply-lock")
     ok("grep -qi finger" not in script, "real omarchy: omarchy-apply-lock no longer greps for 'finger' (0022)")
-    script = script.replace("/usr/bin/fprintd-list", os.path.join(fakes, "fprintd-list")).replace("/etc/pam.d/", pam + "/")
+    script = script.replace("/usr/bin/fprintd-list", os.path.join(fakes, "fprintd-list")).replace("/etc/pam.d/", pam + "/") \
+                   .replace("/usr/lib/systemd/system-sleep/", sysd_sleep + "/") \
+                   .replace("/etc/systemd/system/fprintd.service.d/", sysd_etc + "/")
     tool = os.path.join(d, "omarchy-apply-lock")
     with open(tool, "w") as f:
         f.write(script)
     fpam = os.path.join(pam, "omarchy-lock-fingerprint")
+    hook = os.path.join(sysd_sleep, "fprintd-resume")
+    conf = os.path.join(sysd_etc, "10-stop-timeout.conf")
     results = []
-    for what, text, rc, want in (("no fingers enrolled", PROBE_NO_FINGERS, 0, False),
-                                 ("an enrolled print", PROBE_ENROLLED, 0, True),
-                                 ("a failed fprintd-list", PROBE_FAILED, 1, "kept")):
+    for what, text, rc, want, units in (("no fingers enrolled", PROBE_NO_FINGERS, 0, False, False),
+                                        ("an enrolled print", PROBE_ENROLLED, 0, True, True),
+                                        ("a failed fprintd-list", PROBE_FAILED, 1, "kept", "kept")):
         with open(fpam, "w") as f:
             f.write("kept\n")
+        for f in (hook, conf):
+            with open(f, "w") as fh:
+                fh.write("kept\n")
         set_answer(text, rc)
         r = subprocess.run(["bash", tool], env=env, capture_output=True, text=True)
         there = os.path.exists(fpam)
         got = (open(fpam).read() == "kept\n" and "kept") if there else False
         if there and got != "kept":
             got = "pam_fprintd.so" in open(fpam).read()
-        results.append(r.returncode == 0 and got == want)
+        units_there = units in (True, "kept")
+        units_ok = os.path.exists(hook) == units_there and os.path.exists(conf) == units_there \
+            and (units is not True or open(hook).read() == "hook-src\n")
+        results.append(r.returncode == 0 and got == want and units_ok)
     ok(all(results), "real omarchy: omarchy-apply-lock removes the fingerprint PAM file for no fingers, writes it "
        "for an enrolled print, keeps it when fprintd-list fails (0022) %s" % results)
 
