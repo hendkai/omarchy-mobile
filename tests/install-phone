@@ -242,6 +242,76 @@ printf '\nBOOT_METHOD=android-v4\n' >> "$R/device/testdev/device.conf"
 install --dry-run || { cat "$t/out"; fail "explicit android-v4 installs"; }
 pass "explicit android-v4 and legacy omitted BOOT_METHOD both work"
 
+# --- qcom-abl-v2: boot_b, stock's dtbo_b erased, userdata, slot B ----------
+mkdir -p "$R/device/qcomdev" "$t/qimages"
+echo qcomdev > "$t/qimages/DEVICE"
+echo "boot image" > "$t/qimages/boot.img"
+echo "dtbo image" > "$t/qimages/dtbo.img"
+qdescriptor() {
+  cat <<'EOF'
+CODENAME=qcomdev
+NAME="Qcom ABL v2 Phone"
+BOOT_METHOD=qcom-abl-v2
+BOOT_IMAGES=boot
+UFS_RW="boot_b dtbo_b userdata"
+EOF
+}
+qimg=$R/out/omamobile-rootfs-2026.10.14-aarch64.img.zst
+cp "$img" "$qimg"
+printf 'version: 2026.10.14\ndevice: qcomdev (omamobile-device-qcomdev)\n' > "${qimg%.img.zst}.MANIFEST"
+(cd "$R/out" && sha256sum "$(basename "$qimg")" > "$(basename "$qimg").sha256")
+qdescriptor > "$R/device/qcomdev/device.conf"
+qinstall() {
+  : > "$t/fastboot.log"
+  CONFIRM=qcomdev answers | HOME=$t/home PATH="$t/bin:$PATH" "$R/tools/install-phone" --device qcomdev \
+    --images "$t/qimages" --work "$t/work" "$@" > "$t/out" 2>&1
+}
+qrefuse() {
+  local why=$1
+  if qinstall --dry-run; then cat "$t/out"; fail "qcom-abl-v2 refuses $why"; fi
+  [[ -z $(flashing_calls) ]] || fail "nothing is flashed when qcom-abl-v2 refuses $why"
+}
+vars qcomdev "" $'version-bootloader-a:x\nversion-bootloader-b:x'
+qinstall --dry-run || { cat "$t/out"; fail "a qcom-abl-v2 dry run succeeds"; }
+qexpected="    would run: fastboot -s FAKE123 flash boot_b $t/qimages/boot.img
+    would run: fastboot -s FAKE123 erase dtbo_b
+    would run: fastboot -s FAKE123 flash userdata $t/work/root.simg
+    would run: fastboot -s FAKE123 --set-active=b
+    would run: fastboot -s FAKE123 reboot"
+command -v img2simg >/dev/null || qexpected=${qexpected//root.simg/root.img}
+[[ $(grep 'would run:' "$t/out") == "$qexpected" ]] || { grep 'would run:' "$t/out"; fail "the qcom-abl-v2 dry run prints exactly the allowed commands"; }
+qinstall || { cat "$t/out"; fail "a qcom-abl-v2 full run succeeds"; }
+qwant="-s FAKE123 flash boot_b $t/qimages/boot.img
+-s FAKE123 erase dtbo_b
+-s FAKE123 flash userdata $t/work/root.simg
+-s FAKE123 --set-active=b
+-s FAKE123 reboot"
+command -v img2simg >/dev/null || qwant=${qwant//root.simg/root.img}
+[[ $(flashing_calls) == "$qwant" ]] || { flashing_calls; fail "a qcom-abl-v2 run sends exactly the allowed commands"; }
+qflashed=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$qflashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$qflashed" "$t/qflashed.img"; qflashed=$t/qflashed.img
+fi
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$qflashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=no ]] \
+  || fail "a qcom-abl-v2 install leaves the boot hook off (AUTO_WRITE=no; day-2 is push)"
+pass "qcom-abl-v2: boot_b, dtbo_b erase, userdata, set-active b, reboot — and the boot hook off"
+
+printf 'SOC_IDS="a0:0x9845"\n' >> "$R/device/qcomdev/device.conf"
+qrefuse "a descriptor with SOC_IDS"
+grep -q "takes the DTB from the boot image" "$t/out" || fail "says SOC_KEYS belong to android-v4's ABL"
+qdescriptor | sed 's/dtbo_b //' > "$R/device/qcomdev/device.conf"
+qrefuse "a descriptor without dtbo_b on the allowlist"
+grep -q "dtbo_b must be on UFS_RW" "$t/out" || fail "names dtbo_b"
+qdescriptor | sed 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot dtbo"/' > "$R/device/qcomdev/device.conf"
+qrefuse "a descriptor with a second boot image"
+grep -q "a single boot image, not dtbo" "$t/out" || fail "says only boot is installed"
+qdescriptor > "$R/device/qcomdev/device.conf"
+pass "qcom-abl-v2 refuses SOC_IDS, dtbo_b off the allowlist and a second boot image"
+# Back to the android-v4 fixture for the bundle tests below
+descriptor > "$R/device/testdev/device.conf"
+printf '\nBOOT_METHOD=android-v4\n' >> "$R/device/testdev/device.conf"
+vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
+
 # A release bundle: install beside device.conf and images/, the root image next to it
 BD=$t/bundle/omamobile-testdev-2026.10.13
 mkdir -p "$BD/images"
@@ -363,12 +433,49 @@ fi
 [[ -z $(flashing_calls) ]] || fail "a refused bundle flashes nothing"
 pass "bundle mode: signature required (pinned key), checksums checked, its own images used"
 
+# A qcom-abl-v2 bundle: manifest.json carries the dtbo_b erase, and a
+# manifest without it is refused before the phone is touched
+BDQ=$t/bundle/omamobile-qcomdev-2026.10.14
+mkdir -p "$BDQ/images"
+cp tools/install-phone "$BDQ/install"
+qdescriptor > "$BDQ/device.conf"
+cp "$t/qimages/boot.img" "$BDQ/images/"
+cp "$qimg" "$qimg.sha256" "$R/out/omamobile-rootfs-2026.10.14-aarch64.MANIFEST" "$t/bundle/"
+printf 'kernel release: 7.3.0-test-1\nroot image: %s (%s)\n' "$(basename "$qimg")" "$(cut -d' ' -f1 "$qimg.sha256")" > "$BDQ/MANIFEST"
+python3 -I "$SRC/tools/bundle-manifest" --bundle "$BDQ" --rootfs "$qimg" --rootfs-sha256 "$(cut -d' ' -f1 "$qimg.sha256")" \
+  --version 2026.10.14 --kernel-release 7.3.0-test-1 --channel stable
+python3 -I - "$BDQ/manifest.json" <<'PY' || fail "bundle-manifest writes the qcom-abl-v2 erase plan"
+import json, sys
+m = json.load(open(sys.argv[1]))
+i = m["install"]
+assert i["erases"] == ["dtbo_b"], i["erases"]
+assert "fastboot erase" not in i["never"], "the never-list must drop fastboot erase for the dtbo_b plan"
+PY
+(cd "$BDQ" && find . -type f ! -name SHA256SUMS -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
+qbinstall() {
+  : > "$t/fastboot.log"
+  CONFIRM=qcomdev answers | HOME=$t/home PATH="$t/bin:$PATH" "$BDQ/install" --work "$t/work" "$@" > "$t/out" 2>&1
+}
+vars qcomdev "" $'version-bootloader-a:x\nversion-bootloader-b:x'
+qbinstall --dry-run --unsigned || { cat "$t/out"; fail "a qcom-abl-v2 bundle dry run succeeds"; }
+grep -q 'would run: fastboot -s FAKE123 erase dtbo_b' "$t/out" || { cat "$t/out"; fail "the qcom-abl-v2 bundle dry run erases dtbo_b"; }
+grep -q 'its plan matches the descriptor' "$t/out" || { cat "$t/out"; fail "the manifest's qcom-abl-v2 plan matches the descriptor"; }
+python3 -I -c "import json, sys; p = sys.argv[1]; m = json.load(open(p)); del m['install']['erases']; json.dump(m, open(p, 'w'))" "$BDQ/manifest.json"
+(cd "$BDQ" && find . -type f ! -name SHA256SUMS -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
+if qbinstall --dry-run --unsigned; then fail "refuses a qcom-abl-v2 manifest without the dtbo_b erase"; fi
+[[ ! -s $t/fastboot.log ]] || fail "contacts no phone for a manifest without the erase"
+grep -q "erases (none) are not exactly the installer's" "$t/out" || { cat "$t/out"; fail "names the missing erase"; }
+pass "qcom-abl-v2 bundle: the manifest carries the dtbo_b erase; a manifest without it is refused"
+
 # The script itself: one write path, and none of the forbidden fastboot forms
 code=$(grep -v '^[[:space:]]*#' tools/install-phone)
-grep -nE '(run|fb|FASTBOOT")[^#]*( -w( |$)|--slot|flashing|erase|format|oem )' <<<"$code" && fail "no -w, --slot, flashing, erase, format or oem"
+grep -nE '(run|fb|FASTBOOT")[^#]*( -w( |$)|--slot|flashing|format|oem )' <<<"$code" && fail "no -w, --slot, flashing, format or oem"
+stray=$(grep -nE '(run|fb|FASTBOOT)[^#]*\berase\b' <<<"$code" | grep -v 'run erase "\$part"' || true)
+[[ -z $stray ]] || fail "erase only through the guarded erase(): $stray"
 [[ $(grep -cE '^\s*run flash ' <<<"$code") == 1 ]] || fail "one flash call, inside flash()"
+[[ $(grep -cE '^\s*run erase ' <<<"$code") == 1 ]] || fail "one erase call, inside erase()"
 [[ $(grep -cE '^\s*fb "\$@"' <<<"$code") == 1 ]] || fail "one fastboot write path, inside run()"
-pass "one guarded write path; no -w, --slot, flashing, erase, format or oem"
+pass "one guarded write path (flash) and one guarded erase (qcom-abl-v2's dtbo_b); no -w, --slot, flashing, format or oem"
 
 # Reserved names agree with omamobile-firstboot's
 a=$(sed -n "s/^RESERVED='\(.*\)'$/\1/p" tools/install-phone)

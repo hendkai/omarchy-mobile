@@ -15,8 +15,10 @@ fastboot product the phone must report, an unlocked bootloader and matching
 bootloader slots required, and exactly what is written (each BOOT_IMAGES
 entry of DIR/device.conf to <image>_b, with the exact partition size an
 AVB_FOOTERS image was padded to, then userdata with the root image, then
-"set-active b" and "reboot"), plus the storage-guard allowlist the writes are
-checked against. Nothing else is ever written.
+"set-active b" and "reboot"), the partitions erased before them (none on
+android-v4; stock's dtbo_b on qcom-abl-v2, whose ABL would otherwise apply
+stock's overlays onto the DTB our boot image carries), and the storage-guard
+allowlist the writes are checked against. Nothing else is ever written.
 
 tools/make-bundle runs this before computing SHA256SUMS, so the signed
 checksums cover manifest.json; tools/install-phone reads it back and refuses
@@ -84,6 +86,9 @@ def main():
     codename = d.get("CODENAME", "")
     if not re.match(r"^[a-z0-9]+$", codename):
         die("device.conf has no CODENAME")
+    method = d.get("BOOT_METHOD", "android-v4")
+    if method not in ("android-v4", "qcom-abl-v2"):
+        die("device.conf BOOT_METHOD %s has no install plan" % method)
     boot_images = d.get("BOOT_IMAGES", "").split()
     allow = d.get("UFS_RW", "").split()
     if not boot_images or not allow:
@@ -127,6 +132,19 @@ def main():
         die("userdata is not on the storage-guard allowlist (UFS_RW)")
     writes.append({"partition": "userdata", "source": "root_image", "erases_userdata": True})
 
+    # The erases, ahead of the writes: qcom-abl-v2's ABL applies stock's dtbo
+    # overlays onto the DTB our boot image carries, so stock's dtbo_b must end
+    # up empty; android-v4 has none. The one narrow exception to "no fastboot
+    # erase", named here so the manifest's never-list stays true.
+    erases = []
+    if method == "qcom-abl-v2":
+        if "dtbo_b" not in allow:
+            die("qcom-abl-v2 erases stock's dtbo_b at install; dtbo_b must be on UFS_RW")
+        erases = ["dtbo_b"]
+    never = list(NEVER)
+    if erases:
+        never.remove("fastboot erase")
+
     manifest = {
         "format": FORMAT,
         "name": "Omarchy Mobile",
@@ -148,8 +166,9 @@ def main():
             "require_matching_bootloader_slots": True,
             "storage_guard_allowlist": allow,
             "writes": writes,
+            "erases": erases,
             "after": ["set-active b", "reboot"],
-            "never": NEVER,
+            "never": never,
         },
     }
     out = os.path.join(bundle, "manifest.json")

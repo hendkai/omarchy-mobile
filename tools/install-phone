@@ -7,6 +7,11 @@
 #   - slot B's boot images, one "fastboot flash <image>_b" per BOOT_IMAGES
 #     entry of the device descriptor, each checked against its storage-guard
 #     allowlist (UFS_RW);
+#   - on a BOOT_METHOD=qcom-abl-v2 device, "fastboot erase dtbo_b" after the
+#     boot images: this ABL applies stock's dtbo overlays onto the DTB our
+#     boot image carries, and they target stock's nodes, so dtbo_b must end
+#     up empty (dtbo_b is on the descriptor's allowlist, checked like every
+#     other write; the erase runs for no other partition);
 #   - "fastboot flash userdata" with the root image (this ERASES userdata:
 #     stock Android on slot A needs a factory reset if it is ever booted again);
 #   - "fastboot --set-active=b", then "fastboot reboot".
@@ -26,9 +31,11 @@
 # /etc/omamobile/firstboot.conf (and root's authorized_keys) into a LOCAL
 # COPY of the root image with debugfs (no root needed), with
 # /etc/omamobile/boot-update.conf (AUTO_WRITE=yes: kernel package updates
-# reach slot B through omamobile-boot-update, docs/RELEASES.md §5.3; a
-# development phone, set up by hand, has no such file), shows exactly what it
-# will run, and waits for the codename to be typed. The phone's first boot
+# reach slot B through omamobile-boot-update, docs/RELEASES.md §5.3; on a
+# qcom-abl-v2 device AUTO_WRITE=no, that path not existing for the method
+# yet — day-2 kernel updates come from bin/omamobile push; a development
+# phone, set up by hand, has no such file), shows exactly what it will run,
+# and waits for the codename to be typed. The phone's first boot
 # (omamobile-firstboot) creates the user from that file and deletes it.
 #
 #   install-phone [--dry-run] [options]
@@ -127,17 +134,29 @@ done < "$conf"
 CODENAME=${D[CODENAME]:-}
 [[ $CODENAME =~ ^[a-z0-9]+$ ]] || die "$conf: no CODENAME"
 [[ $mode == bundle || $CODENAME == "$device" ]] || die "$conf: CODENAME=$CODENAME, expected $device"
-# Legacy descriptors omit BOOT_METHOD; only their Android v4 path is installable.
-# Refuse before image preparation or any fastboot query/write.
+# Legacy descriptors omit BOOT_METHOD. android-v4 is the Pixel flow;
+# qcom-abl-v2 (spacewar) writes one boot_b, erases stock's dtbo_b, then the
+# same userdata and slot-B switch. Refuse anything else before image
+# preparation or any fastboot query/write.
 BOOT_METHOD=${D[BOOT_METHOD]-android-v4}
-[[ $BOOT_METHOD == android-v4 ]] || die "$conf: unsupported BOOT_METHOD=$BOOT_METHOD; install-phone supports only android-v4"
-# The descriptor names how ABL picks the base DTB: SOC_IDS (/soc_id, gs101
-# and gs201) or SOC_COMPATIBLE (/soc_compatible, zuma), exactly one, as
-# bin/omamobile checks. A staged descriptor names neither and is refused.
-if [[ -n ${D[SOC_IDS]:-} && -n ${D[SOC_COMPATIBLE]:-} ]]; then
-  die "$conf: SOC_IDS and SOC_COMPATIBLE are exclusive"
-elif [[ -z ${D[SOC_IDS]:-} && -z ${D[SOC_COMPATIBLE]:-} ]]; then
-  die "$conf: SOC_IDS is missing (or SOC_COMPATIBLE); this device can't be installed yet"
+case $BOOT_METHOD in
+  android-v4|qcom-abl-v2) ;;
+  *) die "$conf: unsupported BOOT_METHOD=$BOOT_METHOD; install-phone supports android-v4 and qcom-abl-v2" ;;
+esac
+# The android-v4 descriptor names how ABL picks the base DTB: SOC_IDS
+# (/soc_id, gs101 and gs201) or SOC_COMPATIBLE (/soc_compatible, zuma),
+# exactly one, as bin/omamobile checks. A staged descriptor names neither
+# and is refused. qcom-abl-v2's ABL takes the DTB from the boot image, so
+# neither key belongs in such a descriptor.
+if [[ $BOOT_METHOD == android-v4 ]]; then
+  if [[ -n ${D[SOC_IDS]:-} && -n ${D[SOC_COMPATIBLE]:-} ]]; then
+    die "$conf: SOC_IDS and SOC_COMPATIBLE are exclusive"
+  elif [[ -z ${D[SOC_IDS]:-} && -z ${D[SOC_COMPATIBLE]:-} ]]; then
+    die "$conf: SOC_IDS is missing (or SOC_COMPATIBLE); this device can't be installed yet"
+  fi
+else
+  [[ -z ${D[SOC_IDS]:-} && -z ${D[SOC_COMPATIBLE]:-} ]] ||
+    die "$conf: SOC_IDS/SOC_COMPATIBLE name how android-v4's ABL picks its base DTB; the qcom-abl-v2 ABL takes the DTB from the boot image"
 fi
 # Images record the device they were built for, as flash and push check:
 # out-int/images holds whichever device was built last.
@@ -160,6 +179,15 @@ for p in $BOOT_IMAGES; do
   [[ " $UFS_RW " == *" ${p}_b "* ]] || die "$conf: ${p}_b is not on the storage-guard allowlist (UFS_RW)"
   [[ -f $images/$p.img ]] || die "missing $images/$p.img (bin/omamobile images)"
 done
+if [[ $BOOT_METHOD == qcom-abl-v2 ]]; then
+  # The ABL boots a single header-v2 boot image with the DTB appended; flash
+  # and push check the same shape (bin/omamobile load_device).
+  for p in $BOOT_IMAGES; do
+    [[ $p == boot ]] || die "$conf: qcom-abl-v2 installs a single boot image, not $p"
+  done
+  [[ " $UFS_RW " == *" dtbo_b "* ]] \
+    || die "$conf: qcom-abl-v2 erases stock's dtbo_b at install; dtbo_b must be on UFS_RW"
+fi
 # An AVB_FOOTERS image is padded to the descriptor's partition size, and ABL
 # reads the footer from the end of the partition, so that size must be the
 # phone's exactly (checked against getvar below).
@@ -258,6 +286,10 @@ allow = i.get("storage_guard_allowlist")
 if not isinstance(allow, list):
     bad("install.storage_guard_allowlist is not a list")
 out.append("allowlist=" + " ".join(s(p, r"[a-z_]+", "an allowlist entry") for p in allow))
+erases = i.get("erases", [])
+if not isinstance(erases, list):
+    bad("install.erases is not a list")
+out.append("erases=" + ",".join(s(e, r"[a-z_]+", "an erases entry") for e in erases))
 after = i.get("after")
 if not isinstance(after, list):
     bad("install.after is not a list")
@@ -312,6 +344,12 @@ PY
   want_writes+=("userdata root_image - - true")
   [[ $(printf '%s\n' "${m_writes[@]}") == "$(printf '%s\n' "${want_writes[@]}")" ]] ||
     die "manifest.json's writes are not exactly slot B's images ($(for p in $BOOT_IMAGES; do printf '%s_b ' "$p"; done)) and userdata, with their sizes"
+  # The erases, likewise: none on android-v4, stock's dtbo_b on qcom-abl-v2
+  # (the installer's one erase, and the manifest may not widen it)
+  want_erases=""
+  if [[ $BOOT_METHOD == qcom-abl-v2 ]]; then want_erases=dtbo_b; fi
+  [[ ${M[erases]:-} == "$want_erases" ]] ||
+    die "manifest.json's erases (${M[erases]:-none}) are not exactly the installer's (${want_erases:-none})"
   # Every file of the bundle is listed with its size and SHA-256, and nothing else
   listed=() actual=()
   for entry in "${m_files[@]}"; do
@@ -485,6 +523,18 @@ done
 ssh_key=$(head -1 "$key_file")
 
 # --- A local copy of the root image, with the owner's first-boot file -------
+# A release install takes kernel updates through omamobile-boot-update's
+# pacman hook (docs/RELEASES.md §5.3) — but it has no qcom-abl-v2 path yet
+# (it refuses the method), so on such a phone the hook must not run: day-2
+# kernel updates come from the laptop, bin/omamobile push, and the first
+# install-phone that ships with a qcom-abl-v2-capable boot-update flips
+# this back to yes.
+auto_write=yes
+auto_note="lets the hook write slot B's images on kernel updates (AUTO_WRITE=no stops it)"
+if [[ $BOOT_METHOD == qcom-abl-v2 ]]; then
+  auto_write=no
+  auto_note="stops the hook: omamobile-boot-update has no qcom-abl-v2 path yet, so day-2 kernel updates come from the laptop (bin/omamobile push)"
+fi
 work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
 mkdir -p "$work"
 chmod 700 "$work"
@@ -511,9 +561,9 @@ trap cleanup EXIT
     fi
   } > "$conf_file"
   printf '%s\n' "$ssh_key" > "$keys_file"
-  printf '%s\n' "# Written by install-phone: a release install takes kernel updates through" \
-    "# omamobile-boot-update's pacman hook (docs/RELEASES.md §5.3). AUTO_WRITE=no stops it." \
-    "AUTO_WRITE=yes" > "$boot_conf"
+  printf '%s\n' "# Written by install-phone: omamobile-boot-update's pacman hook (docs/RELEASES.md §5.3)." \
+    "# AUTO_WRITE=$auto_write $auto_note." \
+    "AUTO_WRITE=$auto_write" > "$boot_conf"
 )
 unset wifi_psk
 
@@ -548,7 +598,7 @@ cmp -s <(debugfs -R "cat /etc/omamobile/firstboot.conf" "$copy" 2>/dev/null) "$c
 cmp -s <(debugfs -R "cat /root/.ssh/authorized_keys" "$copy" 2>/dev/null) "$keys_file" || die "writing authorized_keys into the image copy failed"
 cmp -s <(debugfs -R "cat /etc/omamobile/boot-update.conf" "$copy" 2>/dev/null) "$boot_conf" || die "writing boot-update.conf into the image copy failed"
 e2fsck -fn "$copy" >/dev/null 2>&1 || die "the image copy doesn't check clean after the writes"
-note "firstboot.conf, root's authorized_keys and boot-update.conf (AUTO_WRITE=yes) written, file system checks clean"
+note "firstboot.conf, root's authorized_keys and boot-update.conf (AUTO_WRITE=$auto_write) written, file system checks clean"
 userdata_image=$copy
 if command -v img2simg >/dev/null; then
   img2simg "$copy" "$sparse"
@@ -558,14 +608,23 @@ if command -v img2simg >/dev/null; then
 fi
 
 # --- What will be written ----------------------------------------------------
-# The only way this script writes to the phone. PART must be one of the
-# descriptor's boot images with _b on the allowlist, or userdata.
+# The only ways this script writes to the phone. PART must be one of the
+# descriptor's boot images with _b on the allowlist, or userdata; the one
+# erase is stock's dtbo_b, on a qcom-abl-v2 device whose descriptor keeps
+# dtbo_b on the allowlist.
 flash() {
   local part=$1 file=$2 ok=0 p
   for p in $BOOT_IMAGES; do [[ $part == "${p}_b" ]] && ok=1; done
   [[ $part == userdata ]] && ok=1
   ((ok)) && [[ " $UFS_RW " == *" $part "* ]] || die "refusing to write $part: not a slot B boot image or userdata on the allowlist"
   run flash "$part" "$file"
+}
+erase() {
+  local part=$1
+  [[ $BOOT_METHOD == qcom-abl-v2 ]] || die "refusing to erase $part: the dtbo erase is qcom-abl-v2's, not $BOOT_METHOD's"
+  [[ $part == dtbo_b ]] || die "refusing to erase $part: only stock's dtbo on slot B is erased"
+  [[ " $UFS_RW " == *" $part "* ]] || die "refusing to erase $part: not on the storage-guard allowlist"
+  run erase "$part"
 }
 run() {
   if ((dry)); then
@@ -582,9 +641,11 @@ note "user:      $username ($credential), host $hostname, time zone $timezone"
 note "Wi-Fi:     ${wifi_ssid:-none}"
 note "SSH key:   ${ssh_key:0:40}... (root and $username)"
 note "root image: $(basename "$rootfs")"
+[[ $BOOT_METHOD == qcom-abl-v2 ]] && note "dtbo_b:    stock's dtbo erased (its overlays target stock's DTB nodes, not ours)"
 echo
 echo "These commands, and only these, will run:"
 for p in $BOOT_IMAGES; do echo "    fastboot flash ${p}_b $images/$p.img"; done
+[[ $BOOT_METHOD == qcom-abl-v2 ]] && echo "    fastboot erase dtbo_b"
 echo "    fastboot flash userdata $userdata_image"
 echo "    fastboot --set-active=b"
 echo "    fastboot reboot"
@@ -598,6 +659,7 @@ answer=$(ask "Type the phone's codename ($CODENAME) to go ahead")
 
 ((dry)) && say "Dry run: printing the commands instead of running them" || say "Flashing"
 for p in $BOOT_IMAGES; do flash "${p}_b" "$images/$p.img"; done
+[[ $BOOT_METHOD == qcom-abl-v2 ]] && erase dtbo_b
 flash userdata "$userdata_image"
 run --set-active=b
 run reboot

@@ -742,8 +742,9 @@ product, the boot images, the NV partitions, the button combinations and
 pictures, the extraction map (which files, under which names), and quirks
 such as the Pixel 9a's slot mark (AGENTS §4). A device is offered in the
 installer only when its descriptor can be installed by `install-phone`
-(today's check: `BOOT_METHOD` android-v4 and a `SOC_IDS` or
-`SOC_COMPATIBLE`) and it has a published release. A device whose install
+(today's check: `BOOT_METHOD` android-v4 or qcom-abl-v2 — the latter with
+no `SOC_IDS`/`SOC_COMPATIBLE`, its ABL taking the DTB from the boot image)
+and it has a published release. A device whose install
 needs a partition table write (the Pixel 4 family, CONTRIBUTING §3.1) is
 never offered: that write stays a manual, named exception.
 

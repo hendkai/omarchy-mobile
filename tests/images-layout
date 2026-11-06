@@ -99,7 +99,8 @@ fi
 [[ $1 == -s && $2 == "${WANT_SERIAL:-FAKE123}" ]] || { echo "unpinned or wrong serial: $*" >&2; exit 64; }
 shift 2
 [[ $1 == flash && ${FAIL_FLASH:-} == "$2" ]] && { echo FAILED; exit 17; }
-[[ $1 == flash ]] && echo OKAY
+[[ $1 == erase && ${FAIL_ERASE:-} == "$2" ]] && { echo FAILED; exit 17; }
+[[ $1 == flash || $1 == erase ]] && echo OKAY
 exit 0
 EOF
 chmod +x "$t/bin/fastboot"
@@ -120,6 +121,46 @@ stub_images six boot vendor_boot dtbo
 om six flash || { cat "$t/log"; fail "flash runs for the gs101-style device"; }
 [[ $(flashed) == "boot_b vendor_boot_b dtbo_b " ]] || fail "gs101 flash writes boot_b, vendor_boot_b and dtbo_b (got $(flashed))"
 pass "flash writes exactly the gs101-style BOOT_IMAGES"
+
+# qcom-abl-v2 (spacewar's format): boot_b, stock's dtbo_b erased between the
+# flash and the slot switch, then activate and reboot — and nothing else.
+mkdir -p "$R/device/abl2"
+cat > "$R/device/abl2/device.conf" <<'DEVEOF'
+CODENAME=abl2
+NAME="ABL v2 Phone"
+SOC=sm7325
+COMPATIBLE="qcom,sm7325-nothing-abl2"
+PACKAGE=omamobile-device-abl2
+BOOT_METHOD=qcom-abl-v2
+DTB=qcom/sm7325-nothing-abl2.dtb
+INITRAMFS_INIT=initramfs/init
+PANEL_SIZE=1080x2400
+BOOT_IMAGES=boot
+UFS_RW="boot_b dtbo_b userdata"
+CMDLINE="console=ttyMSM0,115200n8"
+BOOT_PAGESIZE=4096
+BOOT_BASE=0x0
+BOOT_KERNEL_OFFSET=0x8000
+BOOT_RAMDISK_OFFSET=0x1000000
+BOOT_DTB_OFFSET=0x1f00000
+BOOT_TAGS_OFFSET=0x100
+BOOT_APPEND_DTB=1
+DEVEOF
+stub_images abl2 boot
+: > "$t/fastboot.log"
+om abl2 flash || { cat "$t/log"; fail "flash runs for the qcom-abl-v2 device"; }
+steps=$(grep -E '^-s FAKE123 ' "$t/fastboot.log" | sed 's/^-s FAKE123 //' | tr '\n' '|')
+[[ $steps == "flash boot_b $K/images/boot.img|erase dtbo_b|--set-active=b|reboot|" ]] \
+  || fail "qcom-abl-v2 flash sends exactly boot_b, the dtbo_b erase, set-active and reboot (got: $steps)"
+pass "qcom-abl-v2 flash: boot_b, stock's dtbo_b erased, then slot B activated and a reboot"
+: > "$t/fastboot.log"
+if FAIL_ERASE=dtbo_b om abl2 flash; then fail "flash propagates a dtbo_b erase failure"; fi
+[[ $(flashed) == "boot_b " ]] || fail "the boot image is written before the failed erase (got $(flashed))"
+! grep -Eq '^-s [^ ]+ (--set-active|reboot)' "$t/fastboot.log" || fail "a failed erase never activates or reboots"
+grep -q 'erasing dtbo_b failed (exit 17)' "$t/log" || fail "flash reports the failed erase and status"
+pass "a failed dtbo_b erase stops before activation and reboot"
+# Back to the gs101-style fixture for the failure tests below
+stub_images six boot vendor_boot dtbo
 
 # A failed write must never activate or reboot the incomplete slot.
 : > "$t/fastboot.log"

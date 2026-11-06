@@ -574,14 +574,33 @@ if DEVICE=abl2dev "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "ima
 grep -q 'BOOT_KERNEL_OFFSET must be a hex address' "$t/log" || fail "non-hex offset failed for the wrong reason: $(cat "$t/log")"
 echo "ok - qcom-abl-v2 validates the header offsets"
 
-# flash, push and fastboot refuse qcom-abl-v2 like qcom-abl, before phone I/O.
+# qcom-abl-v2 without dtbo_b on the allowlist is refused by the descriptor
+# validation: every path that writes slot B's boot image also erases stock's
+# dtbo_b (the ABL would otherwise apply stock's overlays onto our DTB).
 sed -i 's/^BOOT_KERNEL_OFFSET=8000/BOOT_KERNEL_OFFSET=0x8000/' "$t/repo/device/abl2dev/device.conf"
-for cmd in flash push fastboot; do
-  if DEVICE=abl2dev "$t/repo/bin/omamobile" "$cmd" > "$t/log" 2>&1; then fail "$cmd unexpectedly accepted qcom-abl-v2"; fi
-  grep -q "$cmd refuses BOOT_METHOD=qcom-abl/qcom-abl-v2" "$t/log" || fail "$cmd did not refuse qcom-abl-v2: $(cat "$t/log")"
+sed 's/^UFS_RW=.*/UFS_RW="boot_b userdata"/' "$t/repo/device/abl2dev/device.conf" > "$t/repo/device/abl2dev/device.conf.new"
+mv "$t/repo/device/abl2dev/device.conf.new" "$t/repo/device/abl2dev/device.conf"
+if DEVICE=abl2dev "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "images accepted qcom-abl-v2 without dtbo_b on the allowlist"; fi
+grep -q "dtbo_b must be on UFS_RW" "$t/log" || fail "missing dtbo_b failed for the wrong reason: $(cat "$t/log")"
+sed 's/^UFS_RW=.*/UFS_RW="boot_b dtbo_b userdata"/' "$t/repo/device/abl2dev/device.conf" > "$t/repo/device/abl2dev/device.conf.new"
+mv "$t/repo/device/abl2dev/device.conf.new" "$t/repo/device/abl2dev/device.conf"
+echo "ok - qcom-abl-v2 without dtbo_b on UFS_RW is refused before the kernel check"
+
+# flash and push take qcom-abl-v2 (the day-2 and recovery paths) but stop at
+# the images check here, without touching the phone; fastboot keeps refusing
+# it (the panic path to the bootloader is uncharacterized on this ABL).
+rm -f "$t/calls"
+for cmd in flash push; do
+  if DEVICE=abl2dev KERNEL_OUT="$t/no-out" "$t/repo/bin/omamobile" "$cmd" > "$t/log" 2>&1; then
+    fail "$cmd unexpectedly installed qcom-abl-v2"
+  fi
+  grep -q "refuses BOOT_METHOD=qcom-abl" "$t/log" && fail "$cmd still refuses qcom-abl-v2"
+  grep -q "holds images for" "$t/log" || fail "$cmd did not stop at the images check for qcom-abl-v2: $(cat "$t/log")"
 done
+if DEVICE=abl2dev "$t/repo/bin/omamobile" fastboot > "$t/log" 2>&1; then fail "fastboot unexpectedly accepted qcom-abl-v2"; fi
+grep -q 'fastboot refuses BOOT_METHOD=qcom-abl/qcom-abl-v2' "$t/log" || fail "fastboot did not refuse qcom-abl-v2"
 [[ ! -e $t/calls ]] || fail "qcom-abl-v2 flash/push/fastboot accessed the phone"
-echo "ok - BOOT_METHOD=qcom-abl-v2 refused by flash, push and fastboot before phone access"
+echo "ok - qcom-abl-v2: flash/push pass the method gate (stop at the images check), fastboot still refuses"
 
 # The shipped spacewar descriptor is complete: images accepts it as far as
 # the kernel build check.

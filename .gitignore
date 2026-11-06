@@ -8,3 +8,6 @@ logs/
 # Python bytecode from running package code in place
 __pycache__/
 *.pyc
+
+# Tree-local toolchain caches (tools/fetch-toolchain): never committed
+system/
