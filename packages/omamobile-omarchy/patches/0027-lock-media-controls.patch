@@ -28,9 +28,12 @@
 # while it is dark. On a computer (keypad off) nothing shows.
 #
 # Against Omarchy 4.0.6 (edge 4.0.6-1), after 0023 and 0026.
-diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.qml
---- i/shell/plugins/lock/LockGlance.qml
-+++ w/shell/plugins/lock/LockGlance.qml
+# 2026-11-06: the glance gained a comment line above notificationsProc in 4.5, only the LockMediaSource hunk moved — regenerated against Omarchy 4.5.0-3, same
+# semantic change (the previous revision carries the 4.4-era hunks).
+
+
+--- a/shell/plugins/lock/LockGlance.qml
++++ b/shell/plugins/lock/LockGlance.qml
 @@ -22,6 +22,11 @@
  // clock format and the home screen's last weather reading. Nothing here
  // acts on a notification or asks the network.
@@ -66,8 +69,8 @@ diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.q
 +
    Process {
      id: notificationsProc
-     command: ["bash", "-c", "shopt -s nullglob; set -- \"$1\"*.json \"$1\"history/*.json; (($#)) && awk 1 \"$@\" 2>/dev/null; true",
-@@ -367,6 +379,25 @@
+     // 4.5 keeps live and history each as one JSON array on a line.
+@@ -368,6 +380,25 @@
      font.pixelSize: Style.font.display
    }
  
@@ -93,7 +96,7 @@ diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.q
    // ---------------------------------------------------------------- glance
  
    Item {
-@@ -451,6 +482,18 @@
+@@ -452,6 +483,18 @@
            width: parent.width
            spacing: Style.space(10)
  
@@ -112,7 +115,7 @@ diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.q
            Repeater {
              id: cardsRepeater
              model: glance.shownCards
-@@ -508,6 +551,7 @@
+@@ -504,6 +547,7 @@
              width: parent.width
              visible: glance.cards.length === 0
              horizontalAlignment: Text.AlignHCenter
@@ -120,7 +123,7 @@ diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.q
              textFormat: Text.PlainText
              text: "No new notifications"
              color: Commons.Color.lock.placeholder
-@@ -610,6 +654,12 @@
+@@ -606,6 +650,12 @@
            return
          }
          if (Math.abs(moved) < Style.space(12) && Math.abs(mouse.x - startX) < Style.space(12)) {
@@ -133,10 +136,8 @@ diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.q
            var card = glance.cardAt(swipe, mouse.x, mouse.y)
            if (card) glance.toggleCard(card.modelData.file)
          }
-diff --git i/shell/plugins/lock/LockMedia.js w/shell/plugins/lock/LockMedia.js
-new file mode 100644
 --- /dev/null
-+++ w/shell/plugins/lock/LockMedia.js
++++ b/shell/plugins/lock/LockMedia.js
 @@ -0,0 +1,124 @@
 +// What the lock's media controls show: which MPRIS player, what it says and
 +// which art may load. Pure functions over objects with MprisPlayer's
@@ -262,10 +263,8 @@ new file mode 100644
 +    canPlayPause: canPlayPause, lines: lines, accessibleName: accessibleName
 +  }
 +}
-diff --git i/shell/plugins/lock/LockMedia.qml w/shell/plugins/lock/LockMedia.qml
-new file mode 100644
 --- /dev/null
-+++ w/shell/plugins/lock/LockMedia.qml
++++ b/shell/plugins/lock/LockMedia.qml
 @@ -0,0 +1,297 @@
 +import QtQuick
 +import Quickshell
@@ -564,10 +563,8 @@ new file mode 100644
 +    }
 +  }
 +}
-diff --git i/shell/plugins/lock/LockMediaSource.qml w/shell/plugins/lock/LockMediaSource.qml
-new file mode 100644
 --- /dev/null
-+++ w/shell/plugins/lock/LockMediaSource.qml
++++ b/shell/plugins/lock/LockMediaSource.qml
 @@ -0,0 +1,52 @@
 +import QtQuick
 +import Quickshell.Services.Mpris
