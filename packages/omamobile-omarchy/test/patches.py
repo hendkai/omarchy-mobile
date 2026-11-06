@@ -381,7 +381,10 @@ def real_package(t):
        "real omarchy: the menu's header has a back button below the top level (0018)")
     ok("(event.key === Qt.Key_Backspace || event.key === Qt.Key_Left) && !root.filterText) {\n            root.goBack()" in menu,
        "real omarchy: Backspace and Left still go back (0018)")
-    ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
+    # The menu-first-frame bridge is dropped on the 4.5 line: its menu is an
+    # OverlayWindow, transparent until sized and scaled (upstream's own fix).
+    ok("  OverlayWindow {" in menu and "property bool cardSettled" not in menu,
+       "real omarchy: the menu opens in an OverlayWindow, no first-frame bridge needed")
     qml_parse(root)
     lock_glance(root)
     lock_battery(t, root)
