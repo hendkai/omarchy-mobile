@@ -11,6 +11,7 @@ depends=(
   alsa-ucm-conf
   bash
   feedbackd
+  modemmanager
   omamobile-keyring
   systemd
 )
