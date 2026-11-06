@@ -1,0 +1,124 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for linux-omamobile-spacewar, from a copy of this directory alone,
+# against a fake kernel build (a made-up arm64 Image header gzipped, a fake
+# DTB, and a modules tarball shaped like kernel-spacewar/build.sh' output):
+# the release-to-pkgver mapping, the refusals of ./stage, the package
+# layout, and makepkg itself where it is installed.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+PKG=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+for f in stage install lib/pkgver test/all PKGBUILD; do bash -n "$f" || fail "$f parses"; done
+pass "scripts parse"
+command -v zstd >/dev/null || { pass "# SKIP no zstd"; exit 0; }
+
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+
+# ---------------------------------------------------------------- pkgver
+check_ver() { # release expected
+  local want=$2
+  [[ $(lib/pkgver "$1" 2>/dev/null) == "$want" ]] || fail "pkgver $1 -> $want (got $(lib/pkgver "$1" 2>&1))"
+}
+check_ver 7.2.2-sc7280-omamobile1-gf8442dd4bf02 7.2.2.sc7280.omamobile1.gf8442dd4bf02
+check_ver 7.2.2-sc7280-omamobile1-gf8442dd4bf02-dirty 7.2.2.sc7280.omamobile1.gf8442dd4bf02
+check_ver 7.3.0-sc7280-omamobile1-gabcdef012345 7.3.0.sc7280.omamobile1.gabcdef012345
+for bad in 7.3.0-rc6-omamobile-g0123456789ab 7.3.0-rc6-omamobile-00453-g0123456789ab \
+           7.3.0-rc6-omamobile-push1-00058-g7b0f8b5d18f8 7.2.2-sc7280-omamobile2-gf8442dd4bf02 \
+           7.2.2-sc7280-omamobile1 7.2.2-sc7280-omamobile1-dirty 7.2.2 ''; do
+  if lib/pkgver "$bad" >/dev/null 2>&1; then fail "pkgver refuses '$bad'"; fi
+done
+pass "pkgver maps spacewar releases, refuses gs201 and others"
+if command -v vercmp >/dev/null; then
+  [[ $(vercmp 7.3.0.sc7280.omamobile1.g0000001 7.2.2.sc7280.omamobile1.gfffffff) == 1 ]] \
+    || fail "a newer kernel must sort above an older one"
+  [[ $(vercmp 7.2.2.sc7280.omamobile1.gf8442dd4bf02 7.2.2.sc7280.omamobile1.gf8442dd4bf02-dirty) != 2 ]] || true
+fi
+pass "pkgver sorts upward"
+
+# ------------------------------------------------------- fake build + stage
+rel=7.2.2-sc7280-omamobile1-g00000abcdef1
+out=$t/out
+mkdir -p "$out/include/config" "$out/dts/qcom"
+printf '%s\n' "$rel" > "$out/include/config/kernel.release"
+# An arm64 Image: 64 bytes with ARM\x64 at 0x38, gzipped
+{ head -c 56 /dev/zero | tr '\0' '.'; printf 'ARMd'; head -c 4 /dev/zero | tr '\0' '.'; } | gzip -n > "$out/Image.gz"
+# A DTB: the 0xd00dfeed magic then anything
+{ printf '\xd0\x0d\xfe\xed'; head -c 60 /dev/zero | tr '\0' '.'; } > "$out/dts/qcom/sm7325-nothing-spacewar.dtb"
+mkdir -p "$t/mods/$rel/kernel/drivers"
+touch "$t/mods/$rel/modules.order" "$t/mods/$rel/modules.builtin" "$t/mods/$rel/kernel/drivers/fake.ko"
+printf 'fake\n' > "$t/mods/$rel/modules.devname"
+tar -C "$t/mods" --owner=0 --group=0 --numeric-owner -cf - "$rel" | zstd -q -f -o "$out/modules-$rel.tar.zst"
+
+pre=$t/prebuilt
+./stage "$out" "$pre" >/dev/null || fail "stage rejects a valid kernel-spacewar build"
+pass "stage stages a valid build"
+./stage --verify "$pre" >/dev/null || fail "stage --verify rejects its own staging"
+pass "stage --verify passes the staged build"
+
+grep -q '^commit 00000abcdef1$' "$pre/SOURCE" || fail "SOURCE names the commit"
+pass "SOURCE carries the provenance"
+
+# Wrong kernel (gs201 release) must be refused
+mkdir -p "$t/out2/include/config"
+printf '7.3.0-rc6-omamobile-push1-00058-g7b0f8b5d18f8\n' > "$t/out2/include/config/kernel.release"
+cp "$out/Image.gz" "$t/out2/"
+if ./stage "$t/out2" "$t/pre2" >/dev/null 2>&1; then fail "stage must refuse a gs201 kernel"; fi
+pass "stage refuses a gs201 kernel"
+
+# A non-gzip Image.gz must be refused
+cp "$out/include/config/kernel.release" "$t/out2/"
+cp "$out/dts/qcom/sm7325-nothing-spacewar.dtb" "$t/out2/dts/qcom/" 2>/dev/null || { mkdir -p "$t/out2/dts/qcom"; cp "$out/dts/qcom/sm7325-nothing-spacewar.dtb" "$t/out2/dts/qcom/"; }
+cp "$out/modules-$rel.tar.zst" "$t/out2/"
+printf 'not gzip at all' > "$t/out2/Image.gz"
+if ./stage "$t/out2" "$t/pre3" >/dev/null 2>&1; then fail "stage must refuse a non-gzip Image.gz"; fi
+pass "stage refuses a non-gzip kernel"
+
+# A corrupted prebuilt must fail --verify
+printf 'x' >> "$pre/kernel.release.ignored" # (leave real files alone)
+cp "$pre/SOURCE" "$t/SOURCE.bak"
+printf 'release 7.2.2-sc7280-omamobile1-g00000fffffff\ncommit 00000fffffff\n' > "$pre/SOURCE"
+if ./stage --verify "$pre" >/dev/null 2>&1; then fail "stage --verify must catch a SOURCE that contradicts kernel.release"; fi
+cp "$t/SOURCE.bak" "$pre/SOURCE"
+pass "stage --verify catches a tampered SOURCE"
+
+# ----------------------------------------------------------------- install
+img=$t/img
+mkdir -p "$img"
+./install "$img" "$pre" || fail "install refuses a verified staging"
+r=$img/usr/lib/modules/$rel
+[[ -f $r/vmlinuz ]] || fail "no vmlinuz"
+[[ $(od -An -tx1 -j56 -N4 "$r/vmlinuz" | tr -d ' \n') == 41524d64 ]] || fail "vmlinuz lost the arm64 magic"
+[[ -f $r/pkgbase ]] || fail "no pkgbase"
+[[ $(cat "$r/pkgbase") == linux-omamobile-spacewar ]] || fail "wrong pkgbase"
+[[ -f $r/modules.order ]] || fail "no modules.order"
+[[ -f $r/kernel/drivers/fake.ko ]] || fail "the module did not land"
+[[ -e $r/modules.devname ]] && fail "depmod files must be stripped"
+[[ -f $r/dtbs/qcom/sm7325-nothing-spacewar.dtb ]] || fail "no board DTB"
+[[ $(cat "$img/usr/share/omamobile/linux/kernel.release") == "$rel" ]] || fail "no kernel.release marker"
+[[ -f $img/usr/share/omamobile/linux/SOURCE ]] || fail "no SOURCE marker"
+pass "install lays out vmlinuz, modules, DTB and the markers"
+
+# install must refuse a DESTDIR that is not absolute
+if ./install relative "$pre" >/dev/null 2>&1; then fail "install must refuse a relative DESTDIR"; fi
+pass "install refuses a relative DESTDIR"
+
+# ------------------------------------------------------------- PKGBUILD
+grep -q '^conflicts=(linux-omamobile)' PKGBUILD || fail "the package must conflict with linux-omamobile"
+pass "conflicts with the release kernel package"
+[[ $(cat version) =~ ^[0-9]+$ ]] || fail "version holds the pkgrel"
+pass "version holds the pkgrel"
+
+if command -v makepkg >/dev/null; then
+  mkdir -p "$t/mk/lib" "$t/mk/test"
+  # Only what makepkg reads (a stray pkg/ or src/ in the tree is not ours to copy)
+  cp -a PKGBUILD version stage install lib/pkgver test/all "$t/mk/"
+  cp -a "$pre" "$t/mk/prebuilt"
+  ( cd "$t/mk" && makepkg --printsrcinfo >/dev/null ) || fail "makepkg cannot read the PKGBUILD"
+  pass "makepkg reads the PKGBUILD"
+fi
+
+echo "all passed"

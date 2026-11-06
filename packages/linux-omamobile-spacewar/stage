@@ -1,0 +1,98 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copy a finished kernel-spacewar build into this package's prebuilt/
+# directory, on the build machine, so the PKGBUILD only packs files and
+# never compiles (the local-spacewar counterpart of linux-omamobile/stage;
+# docs/RELEASES.md §4 for the published-flow reasoning).
+#
+#   packages/linux-omamobile-spacewar/stage KERNEL_OUT [PREBUILT]
+#   packages/linux-omamobile-spacewar/stage --verify [PREBUILT]
+#
+# KERNEL_OUT is what kernel-spacewar/build.sh leaves in kernel-spacewar/out
+# (the flat host-side layout, not a kernel O= directory):
+#   include/config/kernel.release      7.2.2-sc7280-omamobile1-g<sha>[-dirty]
+#   Image.gz                           the compressed arm64 kernel
+#   dts/qcom/sm7325-nothing-spacewar.dtb   the board DTB
+#   modules-<release>.tar.zst          the stripped modules, <release>/... inside
+# PREBUILT defaults to prebuilt/ beside this script (gitignored).
+#
+# Unlike linux-omamobile there is NO published-release check: the sc7280
+# tree lives in kernel-spacewar (v7.2.2-sc7280 + the 52 woodyst patches),
+# not on the published omamobile branch, and this package is local-only
+# (built with tools/build-packages --local spacewar; a phone trusts it only
+# through that port's keys). --verify therefore re-checks the checksums,
+# the artifact magics and that SOURCE names the release prebuilt/ holds -
+# the provenance itself is recorded in SOURCE at stage time.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+die() { printf 'stage: %s\n' "$*" >&2; exit 1; }
+DTB=${SPACEWAR_DTB:-qcom/sm7325-nothing-spacewar.dtb}
+
+verify_prebuilt() {
+  local pre=$1 rel commit dtb f
+  [[ -f $pre/kernel.release && -f $pre/SHA256SUMS ]] || die "no staged kernel in $pre"
+  (cd "$pre" && sha256sum --quiet --strict -c SHA256SUMS) || die "$pre fails its checksums"
+  grep -cE '  SOURCE$' "$pre/SHA256SUMS" >/dev/null || die "$pre has no SOURCE (stage it again)"
+  rel=$(cat "$pre/kernel.release")
+  pkgver=$("$here/lib/pkgver" "$rel") || exit 1
+  commit=$(sed -n 's/^commit \([0-9a-f]\{7,40\}\)$/\1/p' "$pre/SOURCE")
+  [[ -n $commit && $rel == *"-g$commit"* ]] || die "$pre/SOURCE does not name the commit $rel was built from"
+  for f in Image.gz modules.tar.zst "dtbs/$DTB"; do
+    [[ -s $pre/$f ]] || die "$pre has no $f"
+  done
+  [[ $(od -An -tx1 -N4 "$pre/Image.gz" | tr -d ' \n') == 1f8b0800* || $(od -An -tx1 -N2 "$pre/Image.gz" | tr -d ' \n') == 1f8b ]] \
+    || die "$pre/Image.gz is not gzip"
+  [[ $(od -An -tx1 -N4 "$pre/dtbs/$DTB" | tr -d ' \n') == d00dfeed ]] || die "$pre/dtbs/$DTB is not a DTB"
+}
+
+if [[ ${1:-} == --verify ]]; then
+  verify_prebuilt "${2:-$here/prebuilt}"
+  echo "verified: $(cat "$here/prebuilt/kernel.release" 2>/dev/null || cat "${2:-$here/prebuilt}/kernel.release") is staged for linux-omamobile-spacewar (local package)"
+  exit 0
+fi
+
+out=${1:?usage: stage KERNEL_OUT [PREBUILT], or stage --verify [PREBUILT]}
+dest=${2:-$here/prebuilt}
+[[ -f $out/include/config/kernel.release ]] || die "no kernel build in $out (include/config/kernel.release; kernel-spacewar/build.sh copies it)"
+rel=$(cat "$out/include/config/kernel.release")
+pkgver=$("$here/lib/pkgver" "$rel") || exit 1
+image=$out/Image.gz
+modules=$out/modules-$rel.tar.zst
+# The board DTB, wherever the wrapper's copies put it: kernel-spacewar/
+# build.sh flattens to dts/<board>.dtb, layout-out.sh also lays out the
+# kernel-style arch/arm64/boot/dts/<dir>/<board>.dtb
+dtb=""
+for cand in "$out/arch/arm64/boot/dts/$DTB" "$out/dts/$DTB" "$out/dts/$(basename "$DTB")"; do
+  [[ -s $cand ]] && dtb=$cand && break
+done
+[[ -n $dtb ]] || die "no board DTB for $DTB in $out (kernel-spacewar/build.sh)"
+[[ -s $image ]] || die "no $image (kernel-spacewar/build.sh)"
+# gzip magic, and an arm64 Image ("ARM\x64") at offset 0x38 once unpacked
+[[ $(od -An -tx1 -N2 "$image" | tr -d ' \n') == 1f8b ]] || die "$image is not gzip"
+[[ $(gzip -dc "$image" | od -An -tx1 -j56 -N4 | tr -d ' \n') == 41524d64 ]] || die "$image does not unpack to an arm64 Image"
+[[ -s $dtb ]] || die "no $dtb (kernel-spacewar/build.sh)"
+[[ $(od -An -tx1 -N4 "$dtb" | tr -d ' \n') == d00dfeed ]] || die "$dtb is not a DTB"
+[[ -s $modules ]] || die "no $modules (kernel-spacewar/build.sh)"
+top=$(tar --zstd -tf "$modules" | sed 's|^\./||; s|/.*||' | sort -u)
+[[ $top == "$rel" ]] || die "$modules holds '$top', not $rel only (a stale tarball?)"
+tar --zstd -tf "$modules" | grep -cE "^(\./)?$rel/modules\.order$" >/dev/null || die "$modules has no modules.order"
+
+rm -rf "$dest.new"
+# -dirty is the gitless volume snapshot's marker (folded away, §16): the
+# commit the release names is the part before it
+base=${rel%-dirty}
+mkdir -p "$dest.new/dtbs/$(dirname "$DTB")"
+cp "$image" "$dest.new/Image.gz"
+cp "$modules" "$dest.new/modules.tar.zst"
+cp "$dtb" "$dest.new/dtbs/$DTB"
+printf '%s\n' "$rel" > "$dest.new/kernel.release"
+{ echo "release $rel"
+  echo "commit ${base##*-g}"
+  echo "tree sc7280-mainline v7.2.2-sc7280 + 52 spacewar patches (kernel-spacewar/src)"
+  echo "local local-only package for the spacewar port (never published; linux-omamobile is the release kernel)"
+} > "$dest.new/SOURCE"
+
+(cd "$dest.new" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort | xargs sha256sum) > "$dest.new/SHA256SUMS"
+rm -rf "$dest"
+mv "$dest.new" "$dest"
+echo "staged $rel (pkgver $pkgver): Image.gz, $(tar --zstd -tf "$modules" | grep -c '\.ko') modules, $DTB in $dest"

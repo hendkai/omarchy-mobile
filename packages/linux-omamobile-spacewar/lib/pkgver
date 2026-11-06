@@ -1,0 +1,31 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The pacman version of the spacewar kernel (a local-only package, unlike
+# linux-omamobile: the sc7280 tree is not the published omamobile branch, so
+# there is no release tag or commit count to check - ./stage documents the
+# provenance in SOURCE instead).
+#
+#   lib/pkgver 7.2.2-sc7280-omamobile1-gf8442dd4bf02        ->  7.2.2.sc7280.omamobile1.gf8442dd4bf02
+#   lib/pkgver 7.2.2-sc7280-omamobile1-gf8442dd4bf02-dirty  ->  7.2.2.sc7280.omamobile1.gf8442dd4bf02
+#
+# The release is CONFIG_LOCALVERSION=-sc7280-omamobile1 on the
+# sc7280-mainline v7.2.2-sc7280 tag plus the 52 spacewar patches (see
+# kernel-spacewar/build.sh): the LOCALVERSION is what keeps this package's
+# module directory from ever colliding with the gs201 kernel's
+# (7.3.0-rc6-omamobile-push1-...). -dirty comes from the gitless snapshot
+# build on the Docker volume (known, cosmetic: BUILD-PIPELINE.md §16) and is
+# folded away here, never packaged as a version of its own.
+#
+# Everything else is refused: a gs201 release (-omamobile-g<sha>,
+# -omamobile-<n>-g<sha>), any other LOCALVERSION, and a release without a
+# commit, so the wrong kernel build can never be staged as spacewar's.
+#
+#   lib/pkgver RELEASE
+set -euo pipefail
+rel=${1:?usage: pkgver RELEASE (as in include/config/kernel.release)}
+re='^([0-9]+)\.([0-9]+)\.([0-9]+)-sc7280-omamobile1-g([0-9a-f]{7,40})(-dirty)?$'
+if ! [[ $rel =~ $re ]]; then
+  echo "pkgver: $rel is not the spacewar kernel (expected <version>-sc7280-omamobile1-g<sha>[-dirty], from kernel-spacewar's CONFIG_LOCALVERSION)" >&2
+  exit 1
+fi
+echo "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}.sc7280.omamobile1.g${BASH_REMATCH[4]}"
