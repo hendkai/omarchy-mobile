@@ -4,9 +4,13 @@
 # waited for a window that never came and sat over the sheet's buttons
 # until its timeout. Every other launch keeps the toast. Candidate for
 # upstream Omarchy.
+
+# 2026-11-06: launch gained a terminal-command branch in 4.5 so the hunk context moved - same gate on the same anchor strings — regenerated against Omarchy 4.5.0-3, same
+# semantic change (the previous revision carries the 4.4-era hunks).
+
 diff --git i/shell/services/AppLibrary.qml w/shell/services/AppLibrary.qml
---- i/shell/services/AppLibrary.qml
-+++ w/shell/services/AppLibrary.qml
+--- a/shell/services/AppLibrary.qml
++++ b/shell/services/AppLibrary.qml
 @@ -74,10 +74,19 @@
      if (!iconIndexScan.running) iconIndexScan.running = true
    }
@@ -25,6 +29,6 @@ diff --git i/shell/services/AppLibrary.qml w/shell/services/AppLibrary.qml
      if (!id) return
 -    root.beginLaunchFeedback(name)
 +    if (!root.launchesShellSurface(id)) root.beginLaunchFeedback(name)
-     // Start gtk-launch inside a scope under app-graphical.slice so apps do not
-     // inherit wayland-wm@.service. Keeping gtk-launch as the desktop-entry
-     // resolver supports IDs with spaces and entries that UWSM rejects.
+     // A terminal app goes through Omarchy's TUI launcher, which names its
+     // terminal window after the command (org.omarchy.nvim), so the dock and
+     // titlebars can tell Neovim from the terminal it runs in.
