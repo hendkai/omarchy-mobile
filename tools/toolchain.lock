@@ -18,6 +18,14 @@ b64 mkbootimg/gki/generate_gki_certificate.py 1bb1feec68a13da18d581aa2c631798f86
 # mkdtboimg.py: AOSP platform/system/libufdt at 70c20864187d (the checkout's commit)
 b64 libufdt/utils/src/mkdtboimg.py 81656c0e344ad2c9e7bdc6775015b38dec2bc2965d482e903fdb4dbd293110a6 https://android.googlesource.com/platform/system/libufdt/+/70c20864187df19f3e7d358ca8436f77d61a3f39/utils/src/mkdtboimg.py?format=TEXT
 #
+# mkbootimg-osm0sis: osm0sis' C mkbootimg at 2021.08.06 - the exact tarball
+# postmarketOS builds (pmaports main/mkbootimg-osm0sis APKBUILD, same
+# sha512). The only packer that writes header v2 with dtb_size 0, the
+# qcom-abl-v2 format: the DTB rides appended to the kernel. The AOSP
+# python mkbootimg above refuses v2 without a --dtb blob. Compiled on
+# demand by bin/omamobile (cc + make), never committed as a binary.
+file mkbootimg-osm0sis/mkbootimg-2021.08.06.tar.gz ce754bf13ceeac7f12581862c07ee5ad80b9648e464dca698dd4569bac088659 https://github.com/osm0sis/mkbootimg/archive/refs/tags/2021.08.06.tar.gz
+#
 # avbtool 1.4.0 and AOSP's RSA-4096 test key (the key ABL accepts with the
 # bootloader unlocked): AOSP platform/external/avb at ba2dec4b035b
 # (android-17.0.0_r1). The footer records avbtool's version, so a bump here

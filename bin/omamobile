@@ -794,7 +794,7 @@ cmd_images() {
     [[ $(cat "$KERNEL_OUT/initramfs.release" 2>/dev/null) == "$(cat "$KERNEL_OUT/include/config/kernel.release")" ]] ||
       die "the initramfs modules are not from this kernel build: omamobile modules && omamobile initramfs"
   fi
-  if [[ $DEV_BOOT_METHOD != qcom-abl ]]; then
+  if [[ $DEV_BOOT_METHOD != qcom-abl && $DEV_BOOT_METHOD != qcom-abl-v2 ]]; then
     [[ -f $tools/mkbootimg.py ]] ||
       die "no mkbootimg.py in $tools: run tools/fetch-toolchain, or set SRC_DIR to an Android checkout (or MKBOOTIMG_DIR)"
     [[ -f $MKDTBOIMG ]] ||
@@ -879,13 +879,29 @@ cmd_images() {
     # descriptor's offsets from the stock bootloader's deviceinfo. The
     # bootloader applies stock's dtbo partitions on top of the base DTB it
     # finds; the installer erases dtbo_b, so only our DTB is in effect.
-    # needs: mkbootimg (system/tools, AOSP Apache-2.0, never committed)
     [[ -f "$boot/Image.gz" ]] || die "qcom-abl-v2 needs $boot/Image.gz (build Image.gz)"
-    [[ -f $tools/mkbootimg.py ]] ||
-      die "qcom-abl-v2 images need $ROOT/system/tools/mkbootimg/mkbootimg.py or $SRC_DIR/system/tools/mkbootimg (or mkbootimg on PATH)"
+    # The packer is osm0sis' C mkbootimg - the exact tarball postmarketOS
+    # builds (pmaports main/mkbootimg-osm0sis), pinned in
+    # tools/toolchain.lock: it writes header v2 with dtb_size 0, where the
+    # DTB rides appended to the kernel. The AOSP python mkbootimg refuses
+    # v2 without a separate --dtb blob and would change the layout. Built
+    # once from the pinned tarball into the toolchain cache.
+    local osm_dir="$TOOLCHAIN_DIR/mkbootimg-osm0sis" osm="$TOOLCHAIN_DIR/mkbootimg-osm0sis/bin/mkbootimg"
+    if [[ ! -x $osm ]]; then
+      pinned mkbootimg-osm0sis ||
+        die "qcom-abl-v2 needs the pinned mkbootimg-osm0sis: run tools/fetch-toolchain"
+      command -v make >/dev/null || die "building mkbootimg-osm0sis needs make"
+      mkdir -p "$osm_dir/bin"
+      rm -rf "$osm_dir/src" "$osm_dir/mkbootimg-2021.08.06"
+      tar -xzf "$osm_dir/mkbootimg-2021.08.06.tar.gz" -C "$osm_dir"
+      mv "$osm_dir/mkbootimg-2021.08.06" "$osm_dir/src"
+      (cd "$osm_dir/src" && make --no-print-directory mkbootimg >/dev/null) ||
+        die "mkbootimg-osm0sis build failed"
+      mv "$osm_dir/src/mkbootimg" "$osm"
+    fi
     cat "$boot/Image.gz" "$dtb" > "$img/$DEV_CODENAME-kernel-dtb"
     say "Boot image (qcom-abl-v2, header 2): boot.img with $DEV_DTB appended"
-    "$tools/mkbootimg.py" \
+    "$osm" \
       --kernel "$img/$DEV_CODENAME-kernel-dtb" \
       --ramdisk "$KERNEL_OUT/initramfs.cpio.lz4" \
       --cmdline "${DEV_CMDLINE:-}" \
