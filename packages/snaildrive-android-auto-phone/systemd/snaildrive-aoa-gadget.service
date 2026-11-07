@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[Unit]
+Description=SnailDrive AOA-Gadget (USB-Accessory-Vorbereitung, nur bei freiem UDC)
+Documentation=file:///usr/share/doc/snaildrive-android-auto-phone/README.md
+# Off until the human enables it: the marker file is created by hand (AGENTS.md
+# safety rules: USB is the only link, a USB step must be able to undo itself).
+ConditionPathExists=/etc/snaildrive-android-auto-phone/aoa-gadget.enable
+After=sys-kernel-config.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/snaildrive-aoa-gadget apply --bind
+ExecStop=/usr/bin/snaildrive-aoa-gadget release
+
+[Install]
+# Bewusst leer: keine Aktivierung beim Boot.

@@ -1,0 +1,47 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Tests fuer snaildrive-android-auto-phone (phone-frei). Laufen auf dem Mac
+# mini und in CI; auf dem Phone nicht noetig. Ohne Phone-I/O.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+for s in install test/all; do
+  bash -n "$s" || fail "$s parses"
+done
+pass "shell scripts parse"
+
+python3 -m py_compile bin/snaildrive-aac-phoneside bin/snaildrive-aoa-gadget \
+  lib/snaildrive-android-auto-phone/snaildrive_aac/*.py \
+  || fail "python sources compile"
+pass "python sources compile"
+
+# Die AAC-Seite spricht die Navi-Datenkanal-Version 1 aus navi_tbt.py.
+grep -q '^SCHEMA_VERSION = 1$' lib/snaildrive-android-auto-phone/navi_tbt.py \
+  || fail "navi_tbt.py is schema v1"
+pass "vendored navi_tbt.py is schema v1"
+
+# Die Dienst-Unit startet nicht von selbst (kein WantedBy).
+if grep -q '^WantedBy=' systemd/snaildrive-android-auto-phone.service systemd/snaildrive-aoa-gadget.service; then
+  fail "units must not enable themselves at boot"
+fi
+pass "units are not enabled at boot"
+
+# Der Gadget-Dienst startet nur mit dem Schalter-Datei (Default aus).
+grep -q 'ConditionPathExists=/etc/snaildrive-android-auto-phone/aoa-gadget.enable' \
+  systemd/snaildrive-aoa-gadget.service || fail "gadget unit is gated by its enable file"
+pass "gadget unit is gated by its enable file"
+
+# Die Unit setzt den Navi-Dienst nicht fuer den Start voraus, aber das Socket
+# muss im RuntimeDirectory liegen (kein Pfad ausserhalb von /run/snaildrive).
+grep -q '^RuntimeDirectory=snaildrive$' systemd/snaildrive-android-auto-phone.service \
+  || fail "service uses RuntimeDirectory=snaildrive"
+pass "service runtime directory is /run/snaildrive"
+
+python3 -m unittest discover -s test -t test -q || fail "python tests"
+pass "python tests (core, lab loopback, gadget guard)"
+
+# Der Entwurf prueft keine Phone-Hardware; Phone-I/O und Fahrzeugtests brauchen
+# Hendriks OK (docs/spacewar-aa-phone-hud-concept.md Kap. 6).
+pass "no phone I/O (lab only)"

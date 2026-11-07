@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""snaildrive-aoa-gadget: USB-Gadget-Vorbereitung fuer den AA-Accessory-Pfad.
+
+Legt unter configfs eine eigene Gadget-Instanz "snaildrive-aac" mit einer
+FunctionFS-Funktion "ffs.aoa" an. Die AOA-Handshake-Seite (noch nicht Teil
+dieses Pakets) bedient diesen Endpunkt. Der Gadget bindet nur an einen freien
+UDC. Ist der UDC schon belegt (z.B. der SSH-Gadget aus der initramfs), bricht
+die Aktion mit Exit 3 ab, statt um den Controller zu konkurrieren.
+
+  snaildrive-aoa-gadget plan    [--root DIR] [--udc-dir DIR] [--bind]
+      Nur ausgeben, was passieren wuerde. Schreibt nichts.
+  snaildrive-aoa-gadget apply   [--root DIR] [--udc-dir DIR] [--bind]
+      Ausfuehren. Ohne --bind bleibt der Gadget unverbunden.
+  snaildrive-aoa-gadget release [--root DIR]
+      Eigenen Gadget vom UDC loesen (UDC-Datei leeren). Nichts anderes.
+
+Exit: 0 ok, 2 Aufrufsfehler, 3 belegt/kein UDC/configfs fehlt.
+Default-Pfade: /sys/kernel/config/usb_gadget und /sys/class/udc.
+Lab-IDs (Linux-Foundation-Testkennung): nicht registriert, nicht fuer Serienbetrieb.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+GADGET = "snaildrive-aac"
+FUNCTION = "ffs.aoa"
+CONFIG = "c.1"
+ID_VENDOR = "0x1d6b"
+ID_PRODUCT = "0x0a5a"
+STRINGS = {"manufacturer": "SnailDrive", "product": "SnailDrive AAC (Lab)", "serialnumber": "lab-0"}
+
+DEFAULT_ROOT = "/sys/kernel/config/usb_gadget"
+DEFAULT_UDC_DIR = "/sys/class/udc"
+
+
+@dataclass
+class Plan:
+    ok: bool
+    reason: str = ""
+    steps: List[str] = field(default_factory=list)
+    udc: Optional[str] = None
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def busy_gadgets(root: str) -> List[str]:
+    """Andere Gadgets mit gesetzter UDC-Datei (ausser unserem)."""
+    out = []
+    if not os.path.isdir(root):
+        return out
+    for name in sorted(os.listdir(root)):
+        if name == GADGET:
+            continue
+        if _read(os.path.join(root, name, "UDC")):
+            out.append(name)
+    return out
+
+
+def free_udc(udc_dir: str) -> Optional[str]:
+    if not os.path.isdir(udc_dir):
+        return None
+    names = sorted(os.listdir(udc_dir))
+    return names[0] if names else None
+
+
+def make_plan(root: str, udc_dir: str, bind: bool) -> Plan:
+    if not os.path.isdir(root):
+        return Plan(False, f"configfs fehlt: {root} (nicht gemountet?)")
+    others = busy_gadgets(root)
+    if others:
+        return Plan(False, "UDC belegt durch anderen Gadget: " + ", ".join(others)
+                    + " (SSH-Gadget der initramfs?) - nichts geaendert")
+    udc = free_udc(udc_dir)
+    if bind and udc is None:
+        return Plan(False, f"kein UDC in {udc_dir}")
+    base = f"{root}/{GADGET}"
+    if _read(f"{base}/UDC"):
+        return Plan(False, "Gadget ist bereits aktiv")
+    steps = [
+        f"mkdir {base}",
+        f"write {base}/idVendor {ID_VENDOR}",
+        f"write {base}/idProduct {ID_PRODUCT}",
+        f"mkdir {base}/strings/0x409",  # configfs: Strings-Ordner muss angelegt werden
+    ]
+    for key, value in STRINGS.items():
+        steps.append(f"write {base}/strings/0x409/{key} {value}")
+    steps += [
+        f"mkdir {base}/functions/{FUNCTION}",
+        f"mkdir {base}/configs/{CONFIG}",
+        f"symlink {base}/configs/{CONFIG}/{FUNCTION} -> {base}/functions/{FUNCTION}",
+    ]
+    if bind:
+        steps.append(f"write {base}/UDC {udc}")
+    return Plan(True, "", steps, udc if bind else None)
+
+
+def _run(plan: Plan, root: str) -> None:
+    for step in plan.steps:
+        verb, _, rest = step.partition(" ")
+        if verb == "mkdir":
+            os.makedirs(rest, exist_ok=True)
+        elif verb == "write":
+            path, _, value = rest.partition(" ")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(value)
+        elif verb == "symlink":
+            link, _, target = rest.partition(" -> ")
+            if not os.path.lexists(link):
+                os.symlink(target, link)
+        else:
+            raise RuntimeError(f"unbekannter Schritt: {step}")
+
+
+def release(root: str) -> int:
+    path = f"{root}/{GADGET}/UDC"
+    if not os.path.exists(path):
+        print("nichts zu loesen")
+        return 0
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("")
+    print("Gadget vom UDC geloest")
+    return 0
+
+
+def main(argv: List[str]) -> int:
+    ap = argparse.ArgumentParser(prog="snaildrive-aoa-gadget")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("plan", "apply", "release"):
+        p = sub.add_parser(name)
+        p.add_argument("--root", default=DEFAULT_ROOT)
+        if name != "release":
+            p.add_argument("--udc-dir", default=DEFAULT_UDC_DIR)
+            p.add_argument("--bind", action="store_true")
+    args = ap.parse_args(argv[1:])
+
+    if args.cmd == "release":
+        return release(args.root)
+    plan = make_plan(args.root, args.udc_dir, args.bind)
+    if not plan.ok:
+        print(f"abbruch: {plan.reason}", file=sys.stderr)
+        return 3
+    for step in plan.steps:
+        print(step)
+    if args.cmd == "apply":
+        _run(plan, args.root)
+        print("angelegt" + (f", gebunden an {plan.udc}" if plan.udc else ", ungebunden"))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

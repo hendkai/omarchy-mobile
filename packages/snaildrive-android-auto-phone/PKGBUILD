@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Maintainer: Snailberg <dev@snailberg.de>
+pkgname=snaildrive-android-auto-phone
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="SnailDrive Android Auto phone side (lab-stage): nav bridge from the offline navi service (TBT v1) to the AA channel, USB AOA gadget guard"
+arch=(any)
+url="https://github.com/hendkai/omarchy-mobile"
+license=(GPL-3.0-or-later)
+depends=(python systemd)
+optdepends=('omamobile-device-spacewar: the spacewar USB controller and udev policy this package expects')
+backup=(etc/snaildrive-android-auto-phone/snaildrive-aac-phoneside.conf)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

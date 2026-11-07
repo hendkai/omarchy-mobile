@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""snaildrive-aac-phoneside: phone-seitiger Navi-Bruecke-Dienst (AAC).
+
+  snaildrive-aac-phoneside serve [--navi SOCK] [--out SOCK] [--status FILE]
+      Laufender Dienst: Navi-Socket (Client) -> AAC-Socket (Server).
+  snaildrive-aac-phoneside convert FILE
+      Offline: NDJSON-Datei (Navi-Datenkanal v1) in aap-nav-status-Zeilen
+      umwandeln, auf stdout. Ohne Socket, ohne Phone (Lab/Test).
+  snaildrive-aac-phoneside status [--status FILE]
+      Status-Datei ausgeben (navidatenkanal.status).
+
+Pfade: CLI-Argumente, sonst Umgebung (SNAILDRIVE_NAVI_SOCKET,
+SNAILDRIVE_AAC_SOCKET, SNAILDRIVE_STATUS_FILE), sonst Defaults unter /run.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "lib", "snaildrive-android-auto-phone"))
+
+from snaildrive_aac import Pipeline, write_status  # noqa: E402
+from snaildrive_aac.service import serve  # noqa: E402
+
+DEFAULT_NAVI = "/run/snaildrive/navi.sock"
+DEFAULT_OUT = "/run/snaildrive/aac-nav.sock"
+DEFAULT_STATUS = "/run/snaildrive/navidatenkanal.status"
+
+
+def _paths(args: argparse.Namespace) -> tuple[str, str, str]:
+    return (
+        args.navi or os.environ.get("SNAILDRIVE_NAVI_SOCKET", DEFAULT_NAVI),
+        args.out or os.environ.get("SNAILDRIVE_AAC_SOCKET", DEFAULT_OUT),
+        args.status or os.environ.get("SNAILDRIVE_STATUS_FILE", DEFAULT_STATUS),
+    )
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    navi, out, status = _paths(args)
+    serve(navi, out, status)
+    return 0
+
+
+def cmd_convert(args: argparse.Namespace) -> int:
+    bad = 0
+
+    def publish(line: bytes) -> None:
+        sys.stdout.write(line.decode("utf-8"))
+
+    def status(state: str, ts: float, detail: str) -> None:
+        nonlocal bad
+        if state == "error":
+            bad += 1
+            print(f"{args.file}: {detail}", file=sys.stderr)
+
+    pipe = Pipeline(publish=publish, status=status)
+    with open(args.file, "rb") as fh:
+        for raw in fh:
+            raw = raw.rstrip(b"\r\n")
+            if not raw:
+                continue
+            try:
+                ts = float(json.loads(raw.decode("utf-8")).get("ts", 0.0))
+            except (ValueError, AttributeError):
+                ts = 0.0  # Pipeline meldet den Fehler ueber navi_tbt
+            pipe.on_line(raw, ts)
+    return 1 if bad else 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    _, _, status = _paths(args)
+    try:
+        with open(status, encoding="utf-8") as fh:
+            sys.stdout.write(fh.read())
+    except FileNotFoundError:
+        print(json.dumps({"state": "waiting", "detail": "keine Status-Datei"}))
+        return 3
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="snaildrive-aac-phoneside")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name, fn in (("serve", cmd_serve), ("status", cmd_status)):
+        p = sub.add_parser(name)
+        p.add_argument("--navi")
+        p.add_argument("--out")
+        p.add_argument("--status")
+        p.set_defaults(fn=fn)
+    p = sub.add_parser("convert")
+    p.add_argument("file")
+    p.set_defaults(fn=cmd_convert)
+    args = ap.parse_args(argv[1:])
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

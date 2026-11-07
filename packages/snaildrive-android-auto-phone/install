@@ -1,0 +1,28 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Stage snaildrive-android-auto-phone into DESTDIR (no activation).
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: ./install DESTDIR}
+[[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+
+install -Dm755 bin/snaildrive-aac-phoneside "$destination/usr/bin/snaildrive-aac-phoneside"
+install -Dm755 bin/snaildrive-aoa-gadget "$destination/usr/bin/snaildrive-aoa-gadget"
+
+lib="$destination/usr/lib/snaildrive-android-auto-phone"
+install -Dm644 lib/snaildrive-android-auto-phone/navi_tbt.py "$lib/navi_tbt.py"
+for f in lib/snaildrive-android-auto-phone/snaildrive_aac/*.py; do
+  install -Dm644 "$f" "$lib/snaildrive_aac/${f##*/}"
+done
+
+install -Dm644 systemd/snaildrive-android-auto-phone.service \
+  "$destination/usr/lib/systemd/system/snaildrive-android-auto-phone.service"
+install -Dm644 systemd/snaildrive-aoa-gadget.service \
+  "$destination/usr/lib/systemd/system/snaildrive-aoa-gadget.service"
+
+install -Dm644 etc/snaildrive-android-auto-phone/snaildrive-aac-phoneside.conf \
+  "$destination/etc/snaildrive-android-auto-phone/snaildrive-aac-phoneside.conf"
+
+install -Dm644 README.md "$destination/usr/share/doc/snaildrive-android-auto-phone/README.md"
+install -Dm644 version "$destination/usr/share/snaildrive-android-auto-phone/version"
