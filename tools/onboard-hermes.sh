@@ -9,7 +9,7 @@
 # Human-run:
 #   * sudoers rule  /etc/sudoers.d/hermes-phone (visudo -f, 0440; HERMES-ONBOARDING.md §2)
 #   * .env          per-LLM keys via scp from the Mac (HERMES-ONBOARDING.md §4),
-#                   e.g. scp hendrik@spacewar:~/GLM_API_KEY ... (or the Mac's .env
+#                   e.g. scp <user>@spacewar:~/GLM_API_KEY ... (or the Mac's .env
 #                   dropped into the user's home and sourced by ~/.profile)
 #   * loginctl enable-linger  (once, after the first login)
 set -euo pipefail
@@ -31,7 +31,7 @@ if command -v hermes >/dev/null 2>&1 && hermes --version >/dev/null 2>&1; then
   log "hermes" "configured (API-only: model=glm-5.3 provider=zai key_env=GLM_API_KEY)"
   echo
   echo "Next steps (see skill spacewar-phone-ops):"
-  echo "  1. sudoers : /etc/sudoers.d/hermes-phone (hendrik ALL=(ALL) NOPASSWD: ALL)"
+  echo "  1. sudoers : /etc/sudoers.d/hermes-phone (<user> ALL=(ALL) NOPASSWD: ALL)"
   echo "  2. secrets : .env with the LLM keys, 0600, sourced by ~/.profile"
   echo "  3. loginctl enable-linger  (once, after the first login)"
   echo "  4. hermes serve unit: ~/.config/systemd/user/hermes.service (enabled by omamobile-setup-user)"

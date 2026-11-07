@@ -2,7 +2,7 @@
 [Unit]
 Description=SnailDrive Android-Auto-Phone-Seite (Navi-Bruecke zum AA-Kanal)
 Documentation=file:///usr/share/doc/snaildrive-android-auto-phone/README.md
-# Startet nur, wenn der Auto-Profil-Trigger (carprofile navi-aa) oder Hendrik
+# Startet nur, wenn der Auto-Profil-Trigger (carprofile navi-aa) oder der Besitzer
 # ihn anfordert. Kein WantedBy: die Unit ist bewusst NICHT aktiviert.
 After=local-fs.target
 

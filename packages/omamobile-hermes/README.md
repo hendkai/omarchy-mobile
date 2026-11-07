@@ -31,8 +31,8 @@ Everything below is installed into the root image at `/usr/share/omamobile/herme
 
 ## Human steps (not automated)
 
-* `/etc/sudoers.d/hermes-phone`: `hendrik ALL=(ALL) NOPASSWD: ALL` (visudo, 0440).
+* `/etc/sudoers.d/hermes-phone`: `<user> ALL=(ALL) NOPASSWD: ALL` (visudo, 0440).
 * `.env` with the LLM keys, scp from the Mac, 0600; never in the image or chat.
-* `sudo loginctl enable-linger hendrik` if the login step could not set it.
+* `sudo loginctl enable-linger <user>` if the login step could not set it.
 
 `tools/onboard-hermes.sh` only reports state and prints these steps.

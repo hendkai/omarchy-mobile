@@ -43,5 +43,5 @@ python3 -m unittest discover -s test -t test -q || fail "python tests"
 pass "python tests (core, lab loopback, gadget guard)"
 
 # Der Entwurf prueft keine Phone-Hardware; Phone-I/O und Fahrzeugtests brauchen
-# Hendriks OK (docs/spacewar-aa-phone-hud-concept.md Kap. 6).
+# OK des Besitzers (docs/spacewar-aa-phone-hud-concept.md Kap. 6).
 pass "no phone I/O (lab only)"
