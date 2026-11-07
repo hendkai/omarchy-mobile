@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# This package ships no code of its own: its files are the P4 onboarding
+# bootstrap for the Hermes agent. The Hermes agent itself is installed
+# into the user's home by bootstrap.sh, from the Hermes agent project.
+# See packages/omamobile-hermes/README.md for the attribution.

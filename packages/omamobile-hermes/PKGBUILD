@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Snailberg port of derekross/omarchy-mobile for spacewar
+pkgname=omamobile-hermes
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Omarchy Mobile: first-login bootstrap for the Hermes agent on the phone (P4 onboarding)"
+arch=(any)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+# User-context install only: the agent binary lands in the user's home at the
+# first login (network needed). The script files below ship in the image.
+depends=()
+options=(!strip)
+install=install
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

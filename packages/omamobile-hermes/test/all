@@ -1,0 +1,53 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-hermes without the phone: the package parses, the bootstrap
+# scripts pass and the root image installs it (P4 onboarding step).
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd -- "$here/../../.." && pwd)
+n=0
+ok() { n=$((n + 1)); echo "ok $n - $1"; }
+fail() { echo "not ok - $1" >&2; exit 1; }
+
+bash -n "$here/../PKGBUILD" || fail "PKGBUILD parses"
+bash -n "$here/../install" || fail "install parses"
+bash -n "$here/../bootstrap.sh" || fail "bootstrap.sh parses"
+
+# shellcheck disable=SC1091
+source "$here/../PKGBUILD"
+[[ $pkgname == omamobile-hermes ]] || fail "package name"
+[[ $pkgver == "0.1.0" ]] || fail "version (package the root image installs)"
+[[ $install == "install" ]] || fail "install script"
+[[ -f "$here/../version" ]] || fail "version file"
+[[ -f "$here/../LICENSE" ]] || fail "LICENSE"
+
+for f in bootstrap.sh hermes.service hermes-bootstrap.service hermes-bootstrap.timer; do
+  [[ -f "$here/../$f" ]] || fail "ships $f"
+done
+ok "package files present"
+
+# The root image must install the bootstrap (the agent itself lives in the
+# user's home, so only the scripts end up in the image).
+if [[ ! -f $repo/rootfs/packages.omamobile ]]; then
+  ok "# skip: the root image's package list is not built here"
+  exit 0
+fi
+list() { sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1" | grep -v '^$'; }
+list "$repo/rootfs/packages.omamobile" | grep -qx omamobile-hermes || fail "not in rootfs/packages.omamobile"
+ok "the root image installs omamobile-hermes"
+
+# The setup-user step that runs the bootstrap must pin the API-only model
+# config (no local LLM, no phone gateway).
+if [[ -f $repo/packages/omamobile-shell/bin/omamobile-setup-user ]]; then
+  for c in 'model.default glm-5.3' 'model.provider zai' 'model.key_env GLM_API_KEY'; do
+    grep -q "$c" "$repo/packages/omamobile-shell/bin/omamobile-setup-user" || fail "setup-user lacks: $c"
+  done
+  grep -q 'hermes doctor --fix' "$repo/packages/omamobile-shell/bin/omamobile-setup-user" || fail "setup-user lacks 'hermes doctor --fix'"
+fi
+ok "the setup-user step matches the API-only onboarding"
+
+if [[ ${OMAMOBILE_HERMES_SKIP_FETCH:-0} == 1 ]]; then
+  ok "# skip: OMAMOBILE_HERMES_SKIP_FETCH=1 (no network to hermes-agent.nousresearch.com)"
+  exit 0
+fi
+ok "package checks complete"

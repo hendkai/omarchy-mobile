@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# hermes-bootstrap.service — the idempotent install/update step of the
+# P4 onboarding. The hermes-bootstrap.timer runs it every 60 s until the
+# agent answers `hermes --version`.
+[Unit]
+Description=Hermes agent bootstrap (P4 onboarding: install/update)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/share/omamobile/hermes/bootstrap.sh
+TimeoutStartSec=600

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# hermes.service — the Hermes agent as a systemd user unit (P4 onboarding).
+
+[Unit]
+Description=Hermes Agent (serve for desktop-tunnel)
+After=network.target
+ConditionPathExists=%h/.local/bin/hermes
+
+[Service]
+ExecStart=%h/.local/bin/hermes serve
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# hermes-bootstrap.timer — retry the Hermes agent bootstrap until the agent
+# is installed. Enables itself with `systemctl --user enable --now` from
+# omamobile-setup-user at the first login.
+[Unit]
+Description=Retry the Hermes agent bootstrap until the agent is installed
+After=default.target
+
+[Timer]
+OnBootSec=20
+OnUnitActiveSec=60
+Unit=hermes-bootstrap.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-hermes into DESTDIR. The bootstrap and its user systemd
+# units ship in the image; the agent itself is installed into the user's
+# home at the first login, where the network is up.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: ./install DESTDIR}
+[[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+
+install -Dm755 bootstrap.sh "$destination/usr/share/omamobile/hermes/bootstrap.sh"
+install -Dm644 hermes.service "$destination/usr/share/omamobile/hermes/hermes.service"
+install -Dm644 hermes-bootstrap.service "$destination/usr/share/omamobile/hermes/hermes-bootstrap.service"
+install -Dm644 hermes-bootstrap.timer "$destination/usr/share/omamobile/hermes/hermes-bootstrap.timer"
+install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-hermes/LICENSE"
+install -Dm644 version "$destination/usr/share/omamobile/hermes/version"
