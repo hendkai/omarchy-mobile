@@ -4,7 +4,7 @@
   "connect": ["display-minimal", "chargeplanner", "fahrtenbuch-start", "navi-aa"],
   "disconnect": ["park-reminder", "navi-aa-stop", "fahrtenbuch-end", "profile-revert"],
   "commands": {
-    "park-reminder": "/usr/local/bin/parkreminder trigger",
+    "park-reminder": "/usr/bin/parkreminder trigger",
     "navi-aa": "/usr/bin/systemctl start snaildrive-android-auto-phone.service",
     "navi-aa-stop": "/usr/bin/systemctl stop snaildrive-android-auto-phone.service"
   },
