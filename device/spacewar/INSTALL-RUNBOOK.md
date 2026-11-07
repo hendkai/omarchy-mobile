@@ -78,7 +78,7 @@ the phone before the dry run.
   UEFI.lnx `FindBootableSlot()` consults `successful_boot`/`tries_remaining`
   in the slot metadata. There is no kernel-space way for us to set it on
   this ABL. The Android `boot_control` HAL performs the GPT write.
-  **Decision required from Hendrik (AGENTS.md GPT-Ausnahme):** which slot-
+  **Decision required from the owner (AGENTS.md GPT-Ausnahme):** which slot-
   success marker to implement for slot A, or accept the 7-boot retry
   ceiling. Research: [boot_control_qcom.cpp][1], [mobile-nixos #111][2].
 
@@ -89,7 +89,7 @@ the phone before the dry run.
   snd_soc_wcd938x). Result awaited.
 
 - **Item 9 — Root SSH + link-local in the initramfs.** The initramfs runs
-  dropbear; root's `authorized_keys` is placed by `install-phone` (Hendrik's
+  dropbear; root's `authorized_keys` is placed by `install-phone` (the owner's
   `id_ed25519` has a passphrase → Bring-up-Key at
   `~/.hermes/cache/scratch/phone_key`). The laptop has no sudo rights on
   172.16.42.2, so the init script additionally sets a link-local
