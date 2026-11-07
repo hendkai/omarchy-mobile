@@ -33,22 +33,35 @@ python3 fahrtenbuch.py import "$tmp/track.csv" | grep -q "0 neue Fahrten" \
   || { echo "not ok - zweiter Import darf nichts doppelt speichern"; exit 1; }
 echo "ok - zweiter Import dedupliziert"
 
-python3 fahrtenbuch.py import "$tmp/track.csv" --gps-source modemmanager 2>"$tmp/err" | grep -q "0 neue Fahrten" \
-  || { echo "not ok - modemmanager-Quelle muss auf den Import zurueckfallen"; exit 1; }
-grep -q "nehme den CSV-Import" "$tmp/err" \
-  || { echo "not ok - Fallback muss warnen"; exit 1; }
-echo "ok - gps-source=modemmanager faellt mit Warnung auf den CSV-Import zurueck"
+# Live-Fahrt (start/end, vom car-Profil gerufen) ohne Modem: GNSS aus, also
+# ohne Koordinaten. Keine Strecke, Zweck offen.
+python3 fahrtenbuch.py start --gps-source none | grep -q "Fahrt gestartet" \
+  || { echo "not ok - start ohne GPS muss die Fahrt oeffnen"; exit 1; }
+python3 fahrtenbuch.py end --gps-source none | grep -q "Strecke keine Daten" \
+  || { echo "not ok - end ohne GPS muss die Fahrt ohne Strecke speichern"; exit 1; }
+python3 fahrtenbuch.py list | grep -q "keine Strecke: Live-Fahrt ohne Track" \
+  || { echo "not ok - Live-Fahrt muss als Notiz 'keine Strecke' zeigen"; exit 1; }
+python3 fahrtenbuch.py end --gps-source none | grep -q "keine laufende Fahrt" \
+  || { echo "not ok - end ohne offene Fahrt darf nichts speichern"; exit 1; }
+echo "ok - start/end ohne GPS: Live-Fahrt ohne Strecke, zweites end ohne offene Fahrt ist leer"
 
-python3 fahrtenbuch.py export 2026-11 --out "$tmp/Fahrtenbuch_2026-11" | grep -q "1 Fahrten" \
-  || { echo "not ok - Export: 1 Fahrt erwartet"; exit 1; }
-python3 - "$tmp/Fahrtenbuch_2026-11.csv" <<'PY'
+# Export: Finanzamt-Format (detail + summary), Zeile der Track-Fahrt mit ~4,4 km.
+python3 fahrtenbuch.py export 2026-11 --out "$tmp/export" >"$tmp/export.out" \
+  || { echo "not ok - Export laeuft nicht durch"; exit 1; }
+for f in Fahrtenbuch_2026-11_detail.csv Fahrtenbuch_2026-11_summary.csv Fahrtenbuch_2026-11.html Fahrtenbuch_2026-11.pdf; do
+  [[ -s "$tmp/export/$f" ]] || { echo "not ok - Export fehlt: $f"; exit 1; }
+done
+python3 - "$tmp/export/Fahrtenbuch_2026-11_detail.csv" <<'PY'
 import csv, sys
-rows = list(csv.reader(open(sys.argv[1], encoding="utf-8"), delimiter=";"))
-assert rows[0][6] == "km", rows[0]
-km = float(rows[1][6])
+rows = list(csv.reader(open(sys.argv[1], encoding="utf-8-sig"), delimiter=";"))
+assert rows[0] == ["Datum", "Beginn", "Ende", "km", "Zweck", "Ziel/Notiz", "Status"], rows[0]
+track = [r for r in rows[1:] if r[0] == "01.11.2026"]
+assert len(track) == 1, rows
+km = float(track[0][3].replace(",", "."))
 assert 4.0 < km < 4.8, km
+assert track[0][4] == "offen", track[0]
 PY
-echo "ok - Export: CSV mit einer Fahrt, ~4.4 km"
+echo "ok - Export: detail-CSV mit der Track-Fahrt, ~4.4 km, Zweck offen; summary, html, pdf da"
 
 # install stages every file into a scratch root (no host paths touched)
 stage="$tmp/stage"
