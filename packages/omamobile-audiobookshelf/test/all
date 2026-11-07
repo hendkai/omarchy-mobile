@@ -1,77 +1,253 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# omamobile-audiobookshelf suite: stub ssh, rsync and curl in a temp PATH; no
-# network, no host, no token leaves the temp dir.
+# omamobile-audiobookshelf suite: no phone, no real host, no real token. ssh,
+# rsync, curl (sync only) and systemctl are stubs in a temp PATH; check and
+# setup talk to a fake Audiobookshelf on 127.0.0.1 (loopback only). The fake
+# token lives in the temp dir and never reaches the output.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/dest"
+tmp=$(mktemp -d)
+abs_pid=""
+cleanup() {
+  if [[ -n $abs_pid ]]; then kill "$abs_pid" 2>/dev/null || true; wait "$abs_pid" 2>/dev/null || true; fi
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+TOKEN=test-token-not-real
+mkdir -p "$tmp/bin" "$tmp/bin-live" "$tmp/dest" "$tmp/state"
 log="$tmp/calls.log"; : > "$log"
+abs_log="$tmp/abs.log"; : > "$abs_log"
+CONF="$tmp/abs-sync.conf"
+ENVF="$tmp/abs-sync.env"
+KEY="$tmp/key"
+: > "$KEY"; chmod 600 "$KEY"
 
-# Stubs: loggen, was aufgerufen wurde; ssh-Verhalten per $SSH_OK steuerbar.
-cat > "$tmp/bin/ssh" <<EOF
+fail() { echo "not ok - $*"; [[ -n ${out:-} && -f ${out:-} ]] && sed 's/^/    | /' "$out"; exit 1; }
+pass() { echo "ok - $*"; }
+has()  { grep -qF -- "$2" "$1"; }                     # has FILE TEXT
+hasnt() { ! grep -qF -- "$2" "$1"; }
+
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+
+# --- stubs --------------------------------------------------------------------
+# Sync: ssh, rsync, curl only log what they were asked (sync tests).
+cat > "$tmp/bin/ssh" <<'EOF'
 #!/bin/sh
-echo "ssh \$*" >> "$log"
-[ "\${SSH_OK:-1}" = 1 ]
+echo "ssh $*" >> "$ABS_SYNC_TEST_LOG"
+[ "${SSH_OK:-1}" = 1 ]
 EOF
-cat > "$tmp/bin/rsync" <<EOF
+cat > "$tmp/bin/rsync" <<'EOF'
 #!/bin/sh
-echo "rsync \$*" >> "$log"
+echo "rsync $*" >> "$ABS_SYNC_TEST_LOG"
 exit 0
 EOF
-cat > "$tmp/bin/curl" <<EOF
+cat > "$tmp/bin/curl" <<'EOF'
 #!/bin/sh
-echo "curl \$*" >> "$log"
+echo "curl $*" >> "$ABS_SYNC_TEST_LOG"
 exit 0
 EOF
-chmod +x "$tmp/bin/"*
+# Live (check/setup): ssh answers the remote commands, systemctl is logged.
+cat > "$tmp/bin-live/ssh" <<'EOF'
+#!/bin/sh
+echo "ssh $*" >> "$ABS_SYNC_TEST_LOG"
+[ "${SSH_OK:-1}" = 1 ] || exit 1
+case "$*" in
+  *"ls -A"*) [ "${SRC_OK:-1}" = 1 ] || exit 1; echo 3 ;;
+esac
+exit 0
+EOF
+cat > "$tmp/bin-live/systemctl" <<'EOF'
+#!/bin/sh
+echo "systemctl $*" >> "$ABS_SYNC_TEST_LOG"
+exit "${SYSTEMCTL_OK:-0}"
+EOF
+chmod +x "$tmp/bin/"* "$tmp/bin-live/"*
 
-cat > "$tmp/conf" <<EOF
-UNRAID_HOST=sync-host.invalid
-UNRAID_KEY=$tmp/key
+sync_run() { env PATH="$tmp/bin:$PATH" ABS_SYNC_TEST_LOG="$log" ABS_SYNC_CONF="$CONF" ABS_SYNC_ENV="$ENVF" "$@"; }
+live()     { env PATH="$tmp/bin-live:$PATH" ABS_SYNC_TEST_LOG="$log" ABS_SYNC_CONF="$CONF" ABS_SYNC_ENV="$ENVF" ABS_SYNC_SYSTEMCTL="$tmp/bin-live/systemctl" "$@"; }
+
+conf_for() { # conf_for ABS_URL LIB_ID
+  cat > "$CONF" <<EOF
+UNRAID_HOST=sync@unraid-test.invalid
+UNRAID_KEY=$KEY
 SRC=/srv/auto-sync/
 DEST=$tmp/dest/
 STATE=$tmp/state/last_sync
 BWLIMIT=1000
 MIN_FREE_GB=0
-ABS_URL=http://abs.invalid:13378
-ABS_LIBRARY_ID=lib-test
+ABS_URL=$1
+ABS_LIBRARY_ID=$2
 EOF
-printf 'ABS_TOKEN=test-token-not-real\n' > "$tmp/env"
-chmod 600 "$tmp/env"
+}
+env_for() { # env_for TOKEN MODE
+  printf 'ABS_TOKEN=%s\n' "$1" > "$ENVF"; chmod "$2" "$ENVF"
+}
+free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'; }
 
-run() { PATH="$tmp/bin:$PATH" ABS_SYNC_CONF="$tmp/conf" ABS_SYNC_ENV="$tmp/env" "$@"; }
-
-# Quelle nicht erreichbar: still beenden, nichts ausfuehren.
-: > "$log"
-SSH_OK=0 run sh abs-sync >/dev/null
-grep -q '^rsync' "$log" && { echo "not ok - ohne Erreichbarkeit kein rsync"; exit 1; }
-echo "ok - Quelle nicht erreichbar: still beendet, kein rsync"
-
-# Erreichbar: rsync von der Quelle, Stand-Datei, Rescan mit Bearer-Token.
-: > "$log"
-SSH_OK=1 run sh abs-sync >/dev/null
-grep -q '^rsync .*sync-host.invalid:/srv/auto-sync/' "$log" \
-  || { echo "not ok - rsync von UNRAID_HOST:SRC erwartet"; cat "$log"; exit 1; }
-grep -q '^curl .*Authorization: Bearer test-token-not-real .*http://abs.invalid:13378/api/libraries/lib-test/scan' "$log" \
-  || { echo "not ok - Rescan an /api/libraries/{id}/scan mit Bearer erwartet"; cat "$log"; exit 1; }
-[[ -s "$tmp/state/last_sync" ]] || { echo "not ok - Stand-Datei fehlt"; exit 1; }
-echo "ok - Sync: rsync von der Quelle, Rescan mit Token, Stand-Datei geschrieben"
-
-# Konfig ohne Host: klarer Fehler, Exit 2.
-printf 'DEST=%s\n' "$tmp/dest/" > "$tmp/conf-bad"
-if PATH="$tmp/bin:$PATH" ABS_SYNC_CONF="$tmp/conf-bad" ABS_SYNC_ENV="$tmp/env" sh abs-sync 2>"$tmp/err" >/dev/null; then
-  echo "not ok - fehlende Konfiguration muss scheitern"; exit 1
-fi
-grep -q "UNRAID_HOST" "$tmp/err" || { echo "not ok - Meldung nennt UNRAID_HOST nicht"; exit 1; }
-echo "ok - fehlende Konfiguration: Abbruch mit Hinweis"
-
-sh -n abs-sync && sh -n audiobookshelf-open && echo "ok - Skripte parsen (sh -n)"
-
-# install stages every file into a scratch root (no host paths touched)
-stage="$tmp/stage"
-./install "$stage"
-for f in usr/bin/abs-sync usr/bin/audiobookshelf-open etc/audiobookshelf-sync.conf usr/share/applications/audiobookshelf.desktop usr/lib/systemd/system/abs-sync.service usr/lib/systemd/system/abs-sync.timer usr/share/omamobile-audiobookshelf/version; do
-  [[ -f "$stage/$f" ]] || { echo "not ok - install stages $f"; exit 1; }
+# --- fake Audiobookshelf (GET only; anything else is refused and logged) -----
+cat > "$tmp/abs.py" <<'EOF'
+import http.server, json, sys
+port, logf = int(sys.argv[1]), sys.argv[2]
+TOKEN = "Bearer test-token-not-real"
+class H(http.server.BaseHTTPRequestHandler):
+    def _send(self, code, body):
+        with open(logf, "a") as f:
+            f.write(f"{self.command} {self.path} {code}\n")
+        data = json.dumps(body, separators=(",", ":")).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+    def do_GET(self):
+        if self.headers.get("Authorization", "") != TOKEN:
+            return self._send(401, {"error": "Unauthorized"})
+        if self.path == "/api/libraries/lib-test":
+            return self._send(200, {"id": "lib-test", "name": "Hoerbuecher Test"})
+        return self._send(404, {"error": "Library not found"})
+    def do_POST(self):
+        self._send(405, {"error": "read only"})
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+EOF
+abs_port=$(free_port)
+python3 "$tmp/abs.py" "$abs_port" "$abs_log" &
+abs_pid=$!
+for _ in $(seq 1 50); do
+  curl -s -o /dev/null "http://127.0.0.1:$abs_port/" && break
+  sleep 0.1
 done
-echo "ok - install stages all 7 files"
+ABS_URL="http://127.0.0.1:$abs_port"
+
+# --- 1. sync (Timer-Lauf, unveraendertes Verhalten) ---------------------------
+conf_for http://abs.invalid:13378 lib-test; env_for "$TOKEN" 600
+: > "$log"; sync_run SSH_OK=0 sh abs-sync >/dev/null 2>&1
+has "$log" "ssh " && hasnt "$log" "rsync " && pass "sync: Quelle nicht erreichbar, still beendet, kein rsync" \
+  || fail "sync: ohne Erreichbarkeit kein rsync erwartet"
+: > "$log"; sync_run SSH_OK=1 sh abs-sync >/dev/null 2>&1
+has "$log" "rsync " || fail "sync: rsync erwartet"
+has "$log" "sync@unraid-test.invalid:/srv/auto-sync/" || fail "sync: rsync von UNRAID_HOST:SRC erwartet"
+has "$log" "Authorization: Bearer $TOKEN" || fail "sync: Rescan mit Bearer-Token erwartet"
+has "$log" "/api/libraries/lib-test/scan" || fail "sync: Rescan-Endpunkt erwartet"
+[[ -s "$tmp/state/last_sync" ]] || fail "sync: Stand-Datei fehlt"
+pass "sync: rsync von der Quelle, Rescan mit Token, Stand-Datei geschrieben"
+
+printf 'DEST=%s\n' "$tmp/dest/" > "$tmp/conf-bad"
+if env PATH="$tmp/bin:$PATH" ABS_SYNC_CONF="$tmp/conf-bad" ABS_SYNC_ENV="$ENVF" sh abs-sync 2>"$tmp/err" >/dev/null; then
+  fail "sync: fehlende Konfiguration muss scheitern"
+fi
+has "$tmp/err" UNRAID_HOST || fail "sync: Meldung nennt UNRAID_HOST nicht"
+pass "sync: fehlende Konfiguration bricht mit Hinweis ab"
+
+out="$tmp/out"
+sync_run sh abs-sync bogus >"$out" 2>&1 && fail "unbekannter Befehl muss scheitern" || true
+pass "unbekannter Befehl: Exit != 0"
+sync_run sh abs-sync help >"$out" 2>&1 || fail "help muss gelingen"
+has "$out" "Usage: abs-sync" || fail "help zeigt die Befehle"
+pass "help listet setup und check"
+
+sh -n abs-sync && sh -n audiobookshelf-open && pass "Skripte parsen (sh -n)"
+
+# --- 2. check: nur lesen, gegen den Fake-Server -------------------------------
+conf_for "$ABS_URL" lib-test; env_for "$TOKEN" 600
+: > "$abs_log"; : > "$log"
+out="$tmp/out"; rc=0; live sh abs-sync check >"$out" 2>&1 || rc=$?
+[[ $rc == 0 ]] || fail "check: alles in Ordnung muss Exit 0 geben (rc=$rc)"
+has "$out" "Bibliothek Hoerbuecher Test" || fail "check: Bibliotheksname erwartet"
+has "$out" "Quelle /srv/auto-sync/ gefunden" || fail "check: Quelle erwartet"
+hasnt "$out" "$TOKEN" || fail "check: Token darf nicht in der Ausgabe stehen"
+grep -qv '^GET ' "$abs_log" && fail "check: nur GET erlaubt, geloggt: $(cat "$abs_log")"
+has "$abs_log" "GET /api/libraries/lib-test 200" || fail "check: GET der Bibliothek erwartet"
+pass "check: alles ok, nur GET, Token nicht in der Ausgabe"
+
+conf_for "$ABS_URL" lib-test; env_for "wrong-token-x" 600
+out="$tmp/out"; rc=0; live sh abs-sync check >"$out" 2>&1 || rc=$?
+[[ $rc == 1 ]] || fail "check: falscher Token muss Exit 1 geben (rc=$rc)"
+has "$out" "lehnt den Token ab" || fail "check: Token-Ablehnung erwartet"
+hasnt "$out" "wrong-token-x" || fail "check: falscher Token darf nicht ausgegeben werden"
+pass "check: falscher Token wird klar gemeldet"
+
+conf_for "$ABS_URL" lib-missing; env_for "$TOKEN" 600
+out="$tmp/out"; rc=0; live sh abs-sync check >"$out" 2>&1 || rc=$?
+[[ $rc == 1 ]] || fail "check: unbekannte Bibliothek muss Exit 1 geben"
+has "$out" "unbekannt" || fail "check: Bibliotheks-ID unbekannt erwartet"
+pass "check: unbekannte Bibliotheks-ID wird gemeldet"
+
+closed=$(free_port)
+conf_for "http://127.0.0.1:$closed" lib-test; env_for "$TOKEN" 600
+out="$tmp/out"; rc=0; live sh abs-sync check >"$out" 2>&1 || rc=$?
+[[ $rc == 1 ]] || fail "check: nicht erreichbare Audiobookshelf muss Exit 1 geben"
+has "$out" "Audiobookshelf unter" || fail "check: Erreichbarkeit der ABS-Adresse erwartet"
+pass "check: Audiobookshelf nicht erreichbar wird gemeldet"
+
+conf_for "$ABS_URL" lib-test; env_for "$TOKEN" 644
+out="$tmp/out"; rc=0; live sh abs-sync check >"$out" 2>&1 || rc=$?
+[[ $rc == 1 ]] || fail "check: falsche Token-Rechte muessen scheitern"
+has "$out" "erwartet 600" || fail "check: Rechte-Hinweis erwartet"
+pass "check: Token-Datei mit falschen Rechten wird gemeldet"
+
+env_for "$TOKEN" 600
+out="$tmp/out"; rc=0; live env SSH_OK=0 sh abs-sync check >"$out" 2>&1 || rc=$?
+[[ $rc == 1 ]] || fail "check: Unraid nicht erreichbar muss scheitern"
+has "$out" "Unraid nicht erreichbar" || fail "check: SSH-Meldung erwartet"
+pass "check: Unraid nicht erreichbar wird gemeldet"
+
+conf_for "$ABS_URL" lib-test; env_for "$TOKEN" 600
+out="$tmp/out"; rc=0; live env SRC_OK=0 sh abs-sync check >"$out" 2>&1 || rc=$?
+[[ $rc == 1 ]] || fail "check: fehlende Quelle muss scheitern"
+pass "check: fehlende Quelle auf dem Unraid wird gemeldet"
+
+grep -v '^ABS_URL=' "$CONF" > "$tmp/conf-partial"; mv "$tmp/conf-partial" "$CONF"
+out="$tmp/out"; rc=0; live sh abs-sync check >"$out" 2>&1 || rc=$?
+[[ $rc == 2 ]] || fail "check: unvollstaendige Konfiguration muss Exit 2 geben (rc=$rc)"
+has "$out" "ABS_URL" || fail "check: fehlendes ABS_URL nennen"
+pass "check: unvollstaendige Konfiguration: Exit 2 mit Hinweis"
+
+# --- 3. setup: interaktiv, Eingaben kommen von stdin --------------------------
+rm -f "$CONF" "$ENVF"
+setup_input() { # setup_input TIMER_ANSWER TOKEN [HOST]
+  printf '%s\n' "${3:-bad host}" "sync@unraid-test.invalid" "$KEY" "/srv/auto-sync/" \
+    "$ABS_URL/" "lib-test" "$2" "$1"
+}
+# Zuerst eine ungueltige Eingabe (Leerzeichen): wird nachgefragt, dann klappt es.
+: > "$log"
+out="$tmp/out"; rc=0
+setup_input n "$TOKEN" | live sh abs-sync setup >"$out" 2>&1 || rc=$?
+[[ $rc == 0 ]] || fail "setup: Einrichtung muss gelingen (rc=$rc)"
+has "$out" "Ungueltige Eingabe" || fail "setup: ungueltige Eingabe muss nachgefragt werden"
+hasnt "$out" "$TOKEN" || fail "setup: Token darf nicht ausgegeben werden"
+has "$out" "Bibliothek Hoerbuecher Test" || fail "setup: Pruefung mit Bibliothek erwartet"
+has "$CONF" "ABS_URL=$ABS_URL" || fail "setup: URL ohne abschliessenden Slash erwartet"
+has "$CONF" "UNRAID_HOST=sync@unraid-test.invalid" || fail "setup: Host in die Konfiguration"
+has "$CONF" "ABS_LIBRARY_ID=lib-test" || fail "setup: Bibliotheks-ID in die Konfiguration"
+hasnt "$CONF" "$TOKEN" || fail "setup: Token darf nicht in der Konfiguration stehen"
+has "$ENVF" "ABS_TOKEN=$TOKEN" || fail "setup: Token in die Env-Datei"
+[[ $(mode_of "$ENVF") == 600 ]] || fail "setup: Env-Datei muss 0600 sein"
+[[ $(mode_of "$CONF") == 644 ]] || fail "setup: Konfiguration 0644 erwartet"
+hasnt "$log" "systemctl" || fail "setup: ohne Ja darf der Timer nicht angefasst werden"
+pass "setup: Dateien geschrieben (0600/0644), Token nirgends ausgegeben, Timer unangetastet"
+
+# Zweiter Lauf: alles per Enter, Token bleibt, Timer ja -> Timer wird aktiviert.
+: > "$log"
+out="$tmp/out"; rc=0
+printf '\n\n\n\n\n\n%s\n' j | live sh abs-sync setup >"$out" 2>&1 || rc=$?
+[[ $rc == 0 ]] || fail "setup zweiter Lauf: rc=$rc"
+has "$ENVF" "ABS_TOKEN=$TOKEN" || fail "setup: Enter behaelt den bisherigen Token"
+has "$log" "systemctl enable --now abs-sync.timer" || fail "setup: Ja aktiviert den Timer nach erfolgreicher Pruefung"
+has "$out" "Timer aktiviert" || fail "setup: Erfolgsmeldung Timer erwartet"
+pass "setup: zweiter Lauf behaelt Token, Ja aktiviert den Timer nach erfolgreicher Pruefung"
+
+# Fehlgeschlagene Pruefung: keine Frage nach dem Timer, nichts aktiviert.
+: > "$log"
+out="$tmp/out"; rc=0
+printf '%s\n' "sync@unraid-test.invalid" "$KEY" "/srv/auto-sync/" "$ABS_URL" "lib-test" "wrong-token-x" j \
+  | live sh abs-sync setup >"$out" 2>&1 || rc=$?
+[[ $rc == 1 ]] || fail "setup mit falschem Token muss Exit 1 geben (rc=$rc)"
+hasnt "$out" "jetzt aktivieren" || fail "setup: bei fehlgeschlagener Pruefung keine Timer-Frage"
+hasnt "$log" "systemctl" || fail "setup: bei fehlgeschlagener Pruefung kein systemctl"
+hasnt "$out" "wrong-token-x" || fail "setup: falscher Token darf nicht ausgegeben werden"
+pass "setup: fehlgeschlagene Pruefung: keine Timer-Frage, kein systemctl"
+
+echo "all omamobile-audiobookshelf tests passed"

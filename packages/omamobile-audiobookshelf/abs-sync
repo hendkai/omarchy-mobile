@@ -1,65 +1,310 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Hoerbuch-Sync: Unraid -> Phone, dann Bibliotheks-Rescan in Audiobookshelf.
-# Laeuft als Timer (abs-sync.timer). Bricht still ab, wenn die Quelle nicht
-# erreichbar ist (Heim-WLAN aus, kein Tailscale). Konfiguration (KEY=VALUE,
-# nie als Shell ausgefuehrt):
+#
+#   abs-sync            Sync + Rescan (das tut der Timer, abs-sync.timer)
+#   abs-sync setup      Einrichtung am Geraet: fragt Host, Schluessel, Pfad, URL,
+#                       Bibliotheks-ID und Token ab (Token ohne Anzeige), schreibt
+#                       beide Dateien, prueft sie und fragt danach, ob der Timer
+#                       aktiviert werden soll. Der Timer wird nie von selbst aktiviert.
+#   abs-sync check      Nur lesen: Schluessel, SSH, Quelle, Token und Bibliothek pruefen.
+#
+# Der Sync-Lauf bricht still ab, wenn die Quelle nicht erreichbar ist (Heim-WLAN
+# aus, kein Tailscale). Konfiguration (KEY=VALUE, nie als Shell ausgefuehrt):
 #   /etc/audiobookshelf-sync.conf   Pfade, Host, Bibliothek (Vorlage im Paket)
 #   /etc/audiobookshelf-sync.env    ABS_TOKEN, Modus 0600, nie ins Repo
+# ABS_SYNC_CONF, ABS_SYNC_ENV und ABS_SYNC_SYSTEMCTL ueberschreiben die Pfade (Tests).
 set -eu
 
 CONF=${ABS_SYNC_CONF:-/etc/audiobookshelf-sync.conf}
 ENVF=${ABS_SYNC_ENV:-/etc/audiobookshelf-sync.env}
+SYSTEMCTL=${ABS_SYNC_SYSTEMCTL:-systemctl}
 
 kv() { # kv FILE KEY -> Wert (letzte Zuweisung, ohne umschliessende Quotes)
   [ -r "$1" ] || return 0
   sed -n "s/^$2=//p" "$1" | tail -n 1 | sed 's/^"//; s/"$//'
 }
 
-UNRAID_HOST=$(kv "$CONF" UNRAID_HOST)
-UNRAID_KEY=$(kv "$CONF" UNRAID_KEY)
-SRC=$(kv "$CONF" SRC)
-DEST=$(kv "$CONF" DEST)
-STATE=$(kv "$CONF" STATE)
-BWLIMIT=$(kv "$CONF" BWLIMIT)
-MIN_FREE_GB=$(kv "$CONF" MIN_FREE_GB)
-ABS_URL=$(kv "$CONF" ABS_URL)
-ABS_LIBRARY_ID=$(kv "$CONF" ABS_LIBRARY_ID)
-ABS_TOKEN=$(kv "$ENVF" ABS_TOKEN)
+mode_of() { # Dateirechte als Oktal, GNU- und BSD-stat
+  stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"
+}
 
-: "${BWLIMIT:=8000}" "${MIN_FREE_GB:=2}"
-if [ -z "$UNRAID_HOST" ] || [ -z "$SRC" ] || [ -z "$DEST" ]; then
-  echo "abs-sync: UNRAID_HOST, SRC und DEST fehlen in $CONF" >&2
-  exit 2
-fi
+load() { # liest die Konfiguration in die Variablen unten
+  UNRAID_HOST=$(kv "$CONF" UNRAID_HOST)
+  UNRAID_KEY=$(kv "$CONF" UNRAID_KEY)
+  SRC=$(kv "$CONF" SRC)
+  DEST=$(kv "$CONF" DEST)
+  STATE=$(kv "$CONF" STATE)
+  BWLIMIT=$(kv "$CONF" BWLIMIT)
+  MIN_FREE_GB=$(kv "$CONF" MIN_FREE_GB)
+  ABS_URL=$(kv "$CONF" ABS_URL)
+  ABS_LIBRARY_ID=$(kv "$CONF" ABS_LIBRARY_ID)
+  ABS_TOKEN=$(kv "$ENVF" ABS_TOKEN)
+  : "${BWLIMIT:=8000}" "${MIN_FREE_GB:=2}"
+  return 0
+}
 
-# Nur syncen, wenn die Quelle erreichbar ist (3 s Probe).
-if ! ssh -i "$UNRAID_KEY" -o ConnectTimeout=3 -o BatchMode=yes "$UNRAID_HOST" true 2>/dev/null; then
-  exit 0
-fi
+usage() {
+  cat <<'EOF'
+Usage: abs-sync [setup|check|help]
+  (ohne Befehl)  Sync von der Unraid-Quelle, dann Bibliotheks-Rescan
+  setup          Einrichtung am Geraet (interaktiv, Token ohne Anzeige)
+  check          Verbindung, Quelle, Token und Bibliothek nur pruefen
+EOF
+}
 
-mkdir -p "$DEST"
-free_gb=$(df -Pk "$DEST" | awk 'NR==2 { print int($4 / 1048576) }')
-if [ "$free_gb" -lt "$MIN_FREE_GB" ]; then
-  echo "abs-sync: zu wenig Platz ($free_gb GB frei, Minimum $MIN_FREE_GB GB) - uebersprungen" >&2
-  exit 0
-fi
-
-# Quelle ist die Symlink-Farm auf dem Unraid, die kuratiert wird (nicht die ganze Bibliothek).
-rsync -a --partial --bwlimit="$BWLIMIT" -e "ssh -i $UNRAID_KEY -o BatchMode=yes" \
-  "$UNRAID_HOST:$SRC" "$DEST"
-
-if [ -n "$STATE" ]; then
-  mkdir -p "$(dirname -- "$STATE")"
-  date -Iseconds > "$STATE"
-fi
-
-# Bibliothek neu scannen (ABS-API: POST /api/libraries/{id}/scan, Bearer-Token).
-if [ -n "$ABS_URL" ] && [ -n "$ABS_LIBRARY_ID" ] && [ -n "$ABS_TOKEN" ]; then
-  if ! curl -fsS -X POST -H "Authorization: Bearer $ABS_TOKEN" \
-       "$ABS_URL/api/libraries/$ABS_LIBRARY_ID/scan" >/dev/null; then
-    echo "abs-sync: Rescan fehlgeschlagen (Sync ist trotzdem fertig)" >&2
+do_sync() {
+  if [ -z "$UNRAID_HOST" ] || [ -z "$SRC" ] || [ -z "$DEST" ]; then
+    echo "abs-sync: UNRAID_HOST, SRC und DEST fehlen in $CONF" >&2
+    exit 2
   fi
-fi
 
-echo "abs-sync: ok $(date -Iseconds)"
+  # Nur syncen, wenn die Quelle erreichbar ist (3 s Probe).
+  if ! ssh -i "$UNRAID_KEY" -o ConnectTimeout=3 -o BatchMode=yes "$UNRAID_HOST" true 2>/dev/null; then
+    exit 0
+  fi
+
+  mkdir -p "$DEST"
+  free_gb=$(df -Pk "$DEST" | awk 'NR==2 { print int($4 / 1048576) }')
+  if [ "$free_gb" -lt "$MIN_FREE_GB" ]; then
+    echo "abs-sync: zu wenig Platz ($free_gb GB frei, Minimum $MIN_FREE_GB GB) - uebersprungen" >&2
+    exit 0
+  fi
+
+  # Quelle ist die Symlink-Farm auf dem Unraid, die kuratiert wird (nicht die ganze Bibliothek).
+  rsync -a --partial --bwlimit="$BWLIMIT" -e "ssh -i $UNRAID_KEY -o BatchMode=yes" \
+    "$UNRAID_HOST:$SRC" "$DEST"
+
+  if [ -n "$STATE" ]; then
+    mkdir -p "$(dirname -- "$STATE")"
+    date -Iseconds > "$STATE"
+  fi
+
+  # Bibliothek neu scannen (ABS-API: POST /api/libraries/{id}/scan, Bearer-Token).
+  if [ -n "$ABS_URL" ] && [ -n "$ABS_LIBRARY_ID" ] && [ -n "$ABS_TOKEN" ]; then
+    if ! curl -fsS -X POST -H "Authorization: Bearer $ABS_TOKEN" \
+         "$ABS_URL/api/libraries/$ABS_LIBRARY_ID/scan" >/dev/null; then
+      echo "abs-sync: Rescan fehlgeschlagen (Sync ist trotzdem fertig)" >&2
+    fi
+  fi
+
+  echo "abs-sync: ok $(date -Iseconds)"
+}
+
+# --- check: nur lesen -------------------------------------------------------
+
+CHECK_RC=0
+fail() { echo "  FEHLER: $1"; CHECK_RC=1; }
+ok()   { echo "  ok: $1"; }
+
+do_check() {
+  CHECK_RC=0
+  echo "abs-sync check (Konfiguration: $CONF, Token-Datei: $ENVF)"
+
+  missing=""
+  [ -n "$UNRAID_HOST" ]    || missing="$missing UNRAID_HOST"
+  [ -n "$UNRAID_KEY" ]     || missing="$missing UNRAID_KEY"
+  [ -n "$SRC" ]            || missing="$missing SRC"
+  [ -n "$ABS_URL" ]        || missing="$missing ABS_URL"
+  [ -n "$ABS_LIBRARY_ID" ] || missing="$missing ABS_LIBRARY_ID"
+  [ -n "$ABS_TOKEN" ]      || missing="$missing ABS_TOKEN"
+  if [ -n "$missing" ]; then
+    echo "  FEHLER: fehlt:$missing - bitte 'abs-sync setup' ausfuehren"
+    return 2
+  fi
+
+  # Token-Datei
+  if [ -r "$ENVF" ]; then
+    m=$(mode_of "$ENVF")
+    if [ "$m" = 600 ]; then ok "Token-Datei, Rechte 600"
+    else fail "Token-Datei hat Rechte $m, erwartet 600 (chmod 600 $ENVF)"; fi
+  else
+    fail "Token-Datei $ENVF nicht lesbar"
+  fi
+
+  # Schluessel
+  if [ -r "$UNRAID_KEY" ]; then ok "SSH-Schluessel vorhanden"
+  else fail "SSH-Schluessel $UNRAID_KEY fehlt (ssh-keygen -t ed25519 -f $UNRAID_KEY -N '' und den Public Key auf dem Unraid eintragen)"; fi
+
+  # SSH und Quelle (nur lesen: Verzeichnis zaehlen)
+  if ssh_out=$(ssh -i "$UNRAID_KEY" -o ConnectTimeout=5 -o BatchMode=yes "$UNRAID_HOST" \
+        "test -d '$SRC' && ls -A '$SRC' | wc -l" 2>/dev/null); then
+    n=$(printf '%s' "$ssh_out" | tr -d ' \t\r\n')
+    ok "Unraid erreichbar, Quelle $SRC gefunden"
+    if [ "$n" = 0 ]; then echo "  Hinweis: die Quelle ist leer (noch nichts zum Kopieren)"; fi
+  else
+    fail "Unraid nicht erreichbar, Schluessel abgelehnt oder Quelle $SRC fehlt (Heimnetz/Tailscale? Public Key eingetragen? Host-Schluessel mit ssh -i $UNRAID_KEY $UNRAID_HOST einmal bestaetigt?)"
+  fi
+
+  # Audiobookshelf: GET der Bibliothek. Der Token geht ueber die Konfig auf stdin,
+  # nicht in der Prozessliste.
+  body=$(mktemp "${TMPDIR:-/tmp}/abs-sync-check.XXXXXX")
+  if code=$(printf 'header = "Authorization: Bearer %s"\n' "$ABS_TOKEN" \
+        | curl -sS --max-time 10 -o "$body" -w '%{http_code}' -K - \
+          "$ABS_URL/api/libraries/$ABS_LIBRARY_ID" 2>/dev/null); then
+    case "$code" in
+      200)
+        name=$(sed -n 's/.*"name" *: *"\([^"]*\)".*/\1/p' "$body" | head -n 1)
+        ok "Audiobookshelf erreichbar, Bibliothek ${name:-gefunden}" ;;
+      401|403) fail "Audiobookshelf lehnt den Token ab (HTTP $code): Token neu erzeugen und 'abs-sync setup' ausfuehren" ;;
+      404)     fail "Bibliotheks-ID $ABS_LIBRARY_ID ist auf dieser Audiobookshelf unbekannt" ;;
+      *)       fail "Audiobookshelf antwortet unerwartet (HTTP $code)" ;;
+    esac
+  else
+    fail "Audiobookshelf unter $ABS_URL nicht erreichbar (Adresse, Port, Tailscale?)"
+  fi
+  rm -f "$body"
+
+  if [ "$CHECK_RC" = 0 ]; then echo "Ergebnis: alles in Ordnung."
+  else echo "Ergebnis: Fehler gefunden, siehe oben."; fi
+  return "$CHECK_RC"
+}
+
+# --- setup: interaktive Einrichtung ------------------------------------------
+
+clean() { # Wert ohne Leerzeichen, Quotes, Backslash, $ und Backtick (KEY=VALUE-sicher)
+  case "$1" in
+    *[[:space:]]*|*\"*|*\'*|*\\*|*\$*|*\`*) return 1 ;;
+  esac
+  return 0
+}
+v_clean() { [ -n "$1" ] && clean "$1"; }
+v_path()  { case "$1" in /*) clean "$1" ;; *) return 1 ;; esac; }
+v_url()   { case "$1" in http://?*|https://?*) clean "$1" ;; *) return 1 ;; esac; }
+v_token() { # Token: nicht leer, keine Quotes, kein Backslash, keine Steuerzeichen
+  [ -n "$1" ] || return 1
+  case "$1" in *\"*|*\\*|*[[:cntrl:]]*) return 1 ;; esac
+  return 0
+}
+
+ask() { # ask VAR PROMPT DEFAULT PRUEFER: liest, bis der Pruefer zustimmt
+  ask_prompt=$2; ask_def=$3; ask_check=$4
+  while :; do
+    if [ -n "$ask_def" ]; then printf '%s [%s]: ' "$ask_prompt" "$ask_def" >&2
+    else printf '%s: ' "$ask_prompt" >&2; fi
+    IFS= read -r ask_val || { echo >&2; echo "abs-sync: Eingabe abgebrochen, nichts geschrieben." >&2; exit 1; }
+    [ -n "$ask_val" ] || ask_val=$ask_def
+    if "$ask_check" "$ask_val"; then
+      eval "$1=\$ask_val"
+      return 0
+    fi
+    echo "  Ungueltige Eingabe (keine Leerzeichen, Quotes oder Backslash; Pfad absolut; URL mit http:// oder https://)." >&2
+  done
+}
+
+read_secret() { # liest eine Zeile ohne Echo (nur am Terminal), Ergebnis in rs_val
+  if [ -t 0 ]; then stty -echo 2>/dev/null || true; fi
+  IFS= read -r rs_val || rs_val=""
+  if [ -t 0 ]; then stty echo 2>/dev/null || true; echo >&2; fi
+}
+
+ask_secret() { # ask_secret VAR PROMPT DEFAULT: Token ohne Echo
+  printf '%s: ' "$2" >&2
+  read_secret
+  [ -n "$rs_val" ] || rs_val=$3
+  while ! v_token "$rs_val"; do
+    echo "  Ungueltiger Token (leer, Quotes oder Backslash). Nochmal:" >&2
+    printf '%s: ' "$2" >&2
+    read_secret
+  done
+  eval "$1=\$rs_val"
+}
+
+ask_yes_no() { # ask_yes_no PROMPT -> 0 bei j/ja/y/yes
+  printf '%s [j/N]: ' "$1" >&2
+  IFS= read -r yn_val || return 1
+  case "$yn_val" in j|J|ja|JA|Ja|y|Y|yes|YES|Yes) return 0 ;; esac
+  return 1
+}
+
+write_conf() { # schreibt KEY=VALUE atomar, 0644 (keine Geheimnisse)
+  dir=$(dirname -- "$CONF")
+  mkdir -p "$dir" || return 1
+  tmp=$(mktemp "$dir/.abs-sync-conf.XXXXXX") || return 1
+  if ! {
+    echo "# /etc/audiobookshelf-sync.conf: von 'abs-sync setup' geschrieben."
+    echo "# KEY=VALUE, keine Shell. Der Token steht NICHT hier, sondern in $ENVF."
+    echo "UNRAID_HOST=$UNRAID_HOST"
+    echo "UNRAID_KEY=$UNRAID_KEY"
+    echo "SRC=$SRC"
+    echo "DEST=$DEST"
+    echo "STATE=$STATE"
+    echo "BWLIMIT=$BWLIMIT"
+    echo "MIN_FREE_GB=$MIN_FREE_GB"
+    echo "ABS_URL=$ABS_URL"
+    echo "ABS_LIBRARY_ID=$ABS_LIBRARY_ID"
+  } > "$tmp"; then rm -f "$tmp"; return 1; fi
+  chmod 644 "$tmp"
+  mv -f "$tmp" "$CONF"
+}
+
+write_env() { # schreibt ABS_TOKEN atomar, 0600 von Anfang an
+  dir=$(dirname -- "$ENVF")
+  mkdir -p "$dir" || return 1
+  tmp=$(mktemp "$dir/.abs-sync-env.XXXXXX") || return 1
+  if ! ( umask 077; printf 'ABS_TOKEN=%s\n' "$ABS_TOKEN" > "$tmp" ); then rm -f "$tmp"; return 1; fi
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$ENVF"
+}
+
+do_setup() {
+  if ! mkdir -p "$(dirname -- "$CONF")" "$(dirname -- "$ENVF")" 2>/dev/null \
+     || ! { : >> "$CONF"; } 2>/dev/null; then
+    echo "abs-sync setup: keine Schreibrechte fuer $CONF. Als root ausfuehren: sudo abs-sync setup" >&2
+    exit 1
+  fi
+  load
+  [ -n "$DEST" ] || DEST=/var/lib/audiobookshelf-sync/audiobooks/
+  [ -n "$STATE" ] || STATE=/var/lib/audiobookshelf-sync/last_sync
+  [ -n "$UNRAID_KEY" ] || UNRAID_KEY=/etc/audiobookshelf-sync/id_ed25519
+  old_token=$ABS_TOKEN
+
+  echo "abs-sync setup: Werte eingeben. Leer = Vorschlag in Klammern."
+  echo "Der Token wird nicht angezeigt. Nichts davon landet im Repo oder in Logs."
+  ask UNRAID_HOST "SSH-Ziel des Unraid (user@host)" "$UNRAID_HOST" v_clean
+  ask UNRAID_KEY "Privater SSH-Schluessel fuer den Unraid" "$UNRAID_KEY" v_path
+  ask SRC "Quelle auf dem Unraid (Symlink-Farm, absoluter Pfad, mit / am Ende)" "$SRC" v_path
+  ask ABS_URL "Audiobookshelf-URL (z.B. http://<host>:13378)" "$ABS_URL" v_url
+  ABS_URL=${ABS_URL%/}
+  ask ABS_LIBRARY_ID "Bibliotheks-ID (Audiobookshelf: Einstellungen > Bibliotheken)" "$ABS_LIBRARY_ID" v_clean
+  if [ -n "$old_token" ]; then tok_hint=" (Enter = bisherigen behalten)"; else tok_hint=""; fi
+  ask_secret ABS_TOKEN "API-Token${tok_hint}" "$old_token"
+
+  write_env || { echo "abs-sync setup: Token-Datei $ENVF konnte nicht geschrieben werden." >&2; exit 1; }
+  write_conf || { echo "abs-sync setup: $CONF konnte nicht geschrieben werden." >&2; exit 1; }
+  if [ "$(mode_of "$ENVF")" != 600 ]; then
+    echo "abs-sync setup: Rechte von $ENVF sind nicht 600. Bitte pruefen." >&2
+    exit 1
+  fi
+  echo "Geschrieben: $CONF (0644) und $ENVF (0600)."
+  echo
+
+  load
+  if do_check; then
+    echo
+    if [ -z "$(command -v "$SYSTEMCTL" 2>/dev/null)" ]; then
+      echo "Kein systemctl gefunden: Timer bleibt aus. Spaeter von Hand: systemctl enable --now abs-sync.timer"
+    elif ask_yes_no "Timer abs-sync.timer jetzt aktivieren (alle 15 Minuten, nur bei erreichbarer Quelle)?"; then
+      if "$SYSTEMCTL" enable --now abs-sync.timer; then
+        echo "Timer aktiviert. Pruefen: systemctl status abs-sync.timer"
+      else
+        echo "Timer konnte nicht aktiviert werden (als root?)." >&2
+        exit 1
+      fi
+    else
+      echo "Timer bleibt aus. Aktivieren spaeter: sudo systemctl enable --now abs-sync.timer"
+    fi
+    return 0
+  fi
+  echo
+  echo "Einrichtung unvollstaendig: Fehler oben beheben, dann 'abs-sync check' oder 'abs-sync setup' erneut."
+  return 1
+}
+
+case "${1:-}" in
+  "")             load; do_sync ;;
+  setup)          do_setup ;;
+  check)          load; do_check ;;
+  help|-h|--help) usage ;;
+  *)              echo "abs-sync: unbekannter Befehl: $1" >&2; usage >&2; exit 2 ;;
+esac
