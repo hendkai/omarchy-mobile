@@ -888,9 +888,8 @@ cmd_images() {
     [[ -f "$boot/Image.gz" ]] || die "qcom-abl-v2 needs $boot/Image.gz (build Image.gz)"
     # The packer is osm0sis' C mkbootimg - the exact tarball postmarketOS
     # builds (pmaports main/mkbootimg-osm0sis), pinned in
-    # tools/toolchain.lock: it writes header v2 with dtb_size 0, where the
-    # DTB rides appended to the kernel. The AOSP python mkbootimg refuses
-    # v2 without a separate --dtb blob and would change the layout. Built
+    # tools/toolchain.lock. Its --dtb fills the v2 header's dtb field (see
+    # below for why both). The AOSP python mkbootimg would change the layout. Built
     # once from the pinned tarball into the toolchain cache.
     local osm_dir="$TOOLCHAIN_DIR/mkbootimg-osm0sis" osm="$TOOLCHAIN_DIR/mkbootimg-osm0sis/bin/mkbootimg"
     if [[ ! -x $osm ]]; then
@@ -905,21 +904,29 @@ cmd_images() {
         die "mkbootimg-osm0sis build failed"
       mv "$osm_dir/src/mkbootimg" "$osm"
     fi
+    # The DTB both appended to Image.gz (as postmarketOS packs it) and in the
+    # v2 header's dtb field: this ABL rejects a v2 image whose dtb_size is 0
+    # ("Load Error", straight back to fastboot; hardware, 2026-11-07).
     cat "$boot/Image.gz" "$dtb" > "$img/$DEV_CODENAME-kernel-dtb"
-    say "Boot image (qcom-abl-v2, header 2): boot.img with $DEV_DTB appended"
+    # The spacewar kernel has CONFIG_RD_LZ4 off (gzip/zstd only): an lz4
+    # ramdisk panics before init and the phone loops on its boot logo.
+    lz4 -dc "$KERNEL_OUT/initramfs.cpio.lz4" | gzip -9n > "$img/initramfs.cpio.gz" ||
+      die "repacking the initramfs as gzip failed"
+    say "Boot image (qcom-abl-v2, header 2): boot.img, DTB appended and in the header, gzip ramdisk"
     "$osm" \
       --kernel "$img/$DEV_CODENAME-kernel-dtb" \
-      --ramdisk "$KERNEL_OUT/initramfs.cpio.lz4" \
+      --ramdisk "$img/initramfs.cpio.gz" \
       --cmdline "${DEV_CMDLINE:-}" \
       --base "$DEV_BOOT_BASE" \
       --kernel_offset "$DEV_BOOT_KERNEL_OFFSET" \
       --ramdisk_offset "$DEV_BOOT_RAMDISK_OFFSET" \
       --tags_offset "$DEV_BOOT_TAGS_OFFSET" \
+      --dtb "$dtb" \
       --dtb_offset "$DEV_BOOT_DTB_OFFSET" \
       --pagesize "$DEV_BOOT_PAGESIZE" \
       --header_version 2 \
       --output "$img/boot.img" || die "mkbootimg failed"
-    rm "$img/$DEV_CODENAME-kernel-dtb"
+    rm "$img/$DEV_CODENAME-kernel-dtb" "$img/initramfs.cpio.gz"
     printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
     ls -lh "$img"/*.img
     sha256sum "$img/boot.img"

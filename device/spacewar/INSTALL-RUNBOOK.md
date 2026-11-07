@@ -82,18 +82,27 @@ the phone before the dry run.
   success marker to implement for slot A, or accept the 7-boot retry
   ceiling. Research: [boot_control_qcom.cpp][1], [mobile-nixos #111][2].
 
-- **Item 8 — usb0 carrier loss (open bug, awaiting results).**
-  `usb0` loses link carrier ~2 s after Arch start, simultaneous with the
-  ADSP-APR / Audio-Probe. Bring-up blacklist lives in
-  `/etc/modprobe.d/omamobile-spacewar-bringup.conf` (snd_soc_sm8250,
-  snd_soc_wcd938x). Result awaited.
+- **Item 8 — usb0 carrier loss under Arch (open, partly explained).**
+  `usb0` lost carrier ~2 s into Arch. With the sound card held back by the
+  bring-up blacklist `/etc/modprobe.d/omamobile-spacewar-bringup.conf`
+  (snd_soc_sm8250, snd_soc_wcd938x) the gadget stays enumerated under Arch,
+  but the network side still needs checking. The real boot blocker was
+  `systemd-firstboot` waiting on a muted tty1 (now masked in the root image).
 
-- **Item 9 — Root SSH + link-local in the initramfs.** The initramfs runs
-  dropbear; root's `authorized_keys` is placed by `install-phone` (the owner's
-  `id_ed25519` has a passphrase → Bring-up-Key at
-  `~/.hermes/cache/scratch/phone_key`). The laptop has no sudo rights on
-  172.16.42.2, so the init script additionally sets a link-local
-  169.254.42.1 on `usb0` — documented here, not yet in the init.
+- **Item 9 — Root SSH + link-local in the initramfs (done).** The initramfs
+  runs dropbear; root's `authorized_keys` is placed by `install-phone`. A
+  laptop without sudo can't add 172.16.42.2, so the init also answers on
+  link-local 169.254.42.1. `omamobile.hold` on the command line opens a 45 s
+  window in which the laptop can keep the phone in the initramfs
+  (`/run/omamobile-hold`, then `/run/omamobile-go`): the way back for
+  repairs needs only a Power long-press, not the bootloader buttons.
+
+- **Item 10 — ADSP firmware in the initramfs (open).** USB device mode needs
+  the ADSP running (pmic_glink reports the role), and the ADSP needs
+  `adsp.mbn` + its `.jsn` before the root is mounted. These are the owner's
+  vendor files, never in the repo: `install-phone` has to add them from the
+  `tools/extract-spacewar-firmware` output to the boot image's ramdisk at
+  install time. Until then a fresh install has no USB link in the initramfs.
 
 ## References
 

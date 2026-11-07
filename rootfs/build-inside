@@ -181,6 +181,7 @@ fi
 say "Services"
 systemctl --root="$T" enable NetworkManager.service systemd-networkd.service systemd-resolved.service \
   sshd.service sddm.service >/dev/null 2>&1
+systemctl --root="$T" mask systemd-firstboot.service >/dev/null 2>&1 || true
 systemctl --root="$T" mask systemd-networkd-wait-online.service NetworkManager-wait-online.service >/dev/null 2>&1
 ln -sfn /run/systemd/resolve/stub-resolv.conf "$T/etc/resolv.conf"
 echo omamobile > "$T/etc/hostname"

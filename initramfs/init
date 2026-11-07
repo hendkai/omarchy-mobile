@@ -176,7 +176,7 @@ load_modules() {
   [ -s /lib/modules/omamobile/order ] || return 0
   board_matches "initramfs modules" || return 0
   while read -r m; do
-    insmod "/lib/modules/omamobile/$m.ko" 2>/dev/null || say "insmod $m failed"
+    insmod "/lib/modules/omamobile/$m.ko" 2>>/run/insmod.log || { say "insmod $m failed"; echo "FAIL $m" >> /run/insmod.log; }
   done < /lib/modules/omamobile/order
 }
 load_modules
@@ -219,6 +219,19 @@ maybe_probe() {
   probe
 }
 maybe_probe
+
+# spacewar: the dwc3 role comes from pmic_glink (ADSP). Until the ADSP is up,
+# force the peripheral role through the role switch's sysfs knob. Only on
+# this board: the Pixels' Type-C drivers own their role.
+if tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null | grep -qx 'nothing,spacewar'; then
+  for i in $(seq 1 15); do
+    for r in /sys/class/usb_role/*/role; do [ -w "$r" ] && echo device > "$r" 2>/dev/null; done
+    [ -n "$(ls /sys/class/udc 2>/dev/null)" ] && break
+    sleep 1
+  done
+  say "usb role: $(cat /sys/class/usb_role/*/role 2>/dev/null | tr '\n' ' ')"
+fi
+
 say "first light on $(cat /proc/sys/kernel/osrelease)"
 
 # The gadget's product string: the descriptor's USB_PRODUCT, or its NAME,
@@ -291,6 +304,9 @@ maybe_usb_switch() {
   ( while sleep 2; do usb_switch quiet; done ) &
 }
 maybe_usb_switch
+
+# spacewar: the Mac has no sudo for 172.16.42.2: also answer on link-local.
+ip addr add 169.254.42.1/16 dev usb0 2>/dev/null
 
 # Network: phone is 172.16.42.1. The host sets 172.16.42.2/24 itself
 # (CONTRIBUTING.md section 2): Alpine's busybox has no udhcpd applet.
@@ -375,6 +391,43 @@ say "ready"
 
 
 
+
+# Bring-up: omamobile.diag logs a short USB/ADSP status through /dev/kmsg
+# three times, 10 s apart (the console shows kmsg in a camera-readable font).
+d() { echo "DIAG $*" | cut -c1-66 | tee /dev/kmsg > /dev/tty0 2>/dev/null; }
+if grep -q omamobile.diag /proc/cmdline; then
+  for _n in 1 2 3; do
+    d "== round $_n up $(cut -d' ' -f1 /proc/uptime)s =="
+    [ $_n = 1 ] && d "cmdline len=$(wc -c < /proc/cmdline)"
+    d "role=$(cat /sys/class/usb_role/*/role 2>/dev/null | tr '\n' ' ')"
+    d "udc=$(ls /sys/class/udc 2>/dev/null) st=$(cat /sys/class/udc/*/state 2>/dev/null)"
+    for r in /sys/class/remoteproc/*; do d "rproc $(cat $r/name 2>/dev/null)=$(cat $r/state 2>/dev/null)"; done
+    d "nmods=$(wc -l < /proc/modules) $(cut -d' ' -f1 /proc/modules | tr '\n' ' ')"
+    [ $_n = 1 ] && { tail -6 /run/insmod.log 2>/dev/null | while read -r l; do d "ins: $l"; done; dmesg | grep -iE 'module|symbol|signature|vermagic|disagree' | tail -4 | while read -r l; do d "${l#*] }"; done; }
+    d "typec=$(ls /sys/class/typec 2>/dev/null | tr '\n' ' ') usb0=$(cat /sys/class/net/usb0/operstate 2>/dev/null)"
+    dmesg | grep -iE 'remoteproc|adsp|q6v5|dwc3|udc|insmod|firmware' | grep -v DIAG | tail -8 | while read -r l; do d "${l#*] }"; done
+    sleep 10
+  done
+fi
+
+# Bring-up: with omamobile.initramfs nothing in Arch feeds the watchdog ABL
+# left running, so feed it here to stay up for serial/SSH work.
+grep -q omamobile.initramfs /proc/cmdline && busybox watchdog -t 5 -T 60 /dev/watchdog 2>/dev/null && say "watchdog fed by initramfs"
+
+# Bring-up hold window: for 45 s a laptop may create /run/omamobile-hold over
+# SSH to keep the phone here (watchdog fed); /run/omamobile-go then boots Arch.
+# Without it the phone boots Arch as usual. Only a Power long-press is needed
+# to come back here, no bootloader buttons.
+if grep -q omamobile.hold /proc/cmdline; then
+  say "hold window 45 s (ssh root@169.254.42.1)"
+  for _h in $(seq 1 45); do [ -e /run/omamobile-hold ] && break; sleep 1; done
+  if [ -e /run/omamobile-hold ]; then
+    say "held in the initramfs; touch /run/omamobile-go to boot Arch"
+    busybox watchdog -t 5 -T 60 /dev/watchdog 2>/dev/null
+    while [ ! -e /run/omamobile-go ]; do sleep 1; done
+    kill -TERM $(pidof watchdog) 2>/dev/null; sleep 1
+  fi
+fi
 
 # First boot of a flashed root image (tools/install-phone): the image is a
 # few GB, so grow its file system to the whole userdata partition before
