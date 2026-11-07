@@ -65,3 +65,40 @@ the phone before the dry run.
 - `bin/omamobile fastboot` (the no-buttons reboot helper) stays refused for
   this ABL; the panic path (`sysrq c` fallthrough) is uncharacterized. Use
   the buttons (Power ~30 s, then Volume Down + Power ~20 s) instead.
+
+## Open items — 2026-11-07 (research + status)
+
+- **Item 7 — ABL boot-success for Slot A (needs human decision).**
+  The `qcom-abl-v2` ABL never marks a slot "successfully booted", so after
+  the retry counter (7 boots) the slot is flagged unbootable and the phone
+  stops trying. On android-v4/Pixel this is a GPT partition-attribute write
+  exposed by `bootctl mark-boot-successful`; the qcom `bootctrl` HAL holds
+  `BOOT_SUCCESSFUL` in the GPT partition-entry attributes field. For
+  `qcom-abl-v2` the AMD/ABL has no exposed API to set that flag; EDK2/
+  UEFI.lnx `FindBootableSlot()` consults `successful_boot`/`tries_remaining`
+  in the slot metadata. There is no kernel-space way for us to set it on
+  this ABL. The Android `boot_control` HAL performs the GPT write.
+  **Decision required from Hendrik (AGENTS.md GPT-Ausnahme):** which slot-
+  success marker to implement for slot A, or accept the 7-boot retry
+  ceiling. Research: [boot_control_qcom.cpp][1], [mobile-nixos #111][2].
+
+- **Item 8 — usb0 carrier loss (open bug, awaiting results).**
+  `usb0` loses link carrier ~2 s after Arch start, simultaneous with the
+  ADSP-APR / Audio-Probe. Bring-up blacklist lives in
+  `/etc/modprobe.d/omamobile-spacewar-bringup.conf` (snd_soc_sm8250,
+  snd_soc_wcd938x). Result awaited.
+
+- **Item 9 — Root SSH + link-local in the initramfs.** The initramfs runs
+  dropbear; root's `authorized_keys` is placed by `install-phone` (Hendrik's
+  `id_ed25519` has a passphrase → Bring-up-Key at
+  `~/.hermes/cache/scratch/phone_key`). The laptop has no sudo rights on
+  172.16.42.2, so the init script additionally sets a link-local
+  169.254.42.1 on `usb0` — documented here, not yet in the init.
+
+## References
+
+- Android boot_control HAL — qcom bootctrl: https://android.googlesource.com/platform/hardware/qcom/bootctrl
+- mobile-nixos #111 (A/B slot boot — bootctl mark-boot-successful, GPT
+  attributes): https://github.com/mobile-nixos/mobile-nixos/issues/111
+- Android A/B "Implement OTA updates" (slot retry count, setActiveBootSlot): https://source.android.com/docs/core/architecture/bootloader/updating
+
