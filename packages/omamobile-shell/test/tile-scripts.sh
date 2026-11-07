@@ -167,3 +167,32 @@ for line in "omamobile-voice start" "omamobile-voice done"; do
   grep -cxF "$line" "$log" >/dev/null || fail "tile-action.sh runs: $line"
 done
 pass "dictation follows voxtype's service and state, opens and finishes the voice bar by direction"
+
+# Car-app tiles (tile-launch.sh): the fake terminal runs the command it is
+# given, with the test's stdin, so each CLI's prompts and arguments are real.
+launch=$dir/tile-launch.sh
+lfake=$tmp/launch/bin; llog=$tmp/launch/log
+mkdir -p "$lfake" && : >"$llog" && ln -s "$(command -v date)" "$lfake/date"
+lstub() { printf '#!/bin/sh\n%s\n' "$2" >"$lfake/$1"; chmod +x "$lfake/$1"; }
+lstub foot 'exec "$@"'
+lstub chargeplanner 'echo "chargeplanner $*" >>"$LOG"'
+lstub fahrtenbuch 'echo "fahrtenbuch $*" >>"$LOG"'
+lstub parkreminder 'echo "parkreminder $*" >>"$LOG"'
+lstub audiobookshelf-open 'echo audiobookshelf-open >>"$LOG"'
+launchrun() { env -i HOME="$tmp/home" LOG="$llog" PATH="$lfake:$basic" sh "$launch" "$@" >/dev/null; }
+
+printf '48.8 9.4\n\n' | launchrun charge || fail "tile-launch.sh charge runs"
+grep -cxF 'chargeplanner 48.8 9.4' "$llog" >/dev/null || fail "Ladeplaner asks the position and plans from it"
+printf '\n\n' | launchrun trips || fail "tile-launch.sh trips runs"
+grep -cxF "fahrtenbuch export $(date +%Y-%m)" "$llog" >/dev/null || fail "Fahrtenbuch exports this month when the month is left empty"
+printf '2026-10\n\n' | launchrun trips || fail "tile-launch.sh trips takes a month"
+grep -cxF 'fahrtenbuch export 2026-10' "$llog" >/dev/null || fail "Fahrtenbuch exports the month it is given"
+printf '\n' | launchrun parking || fail "tile-launch.sh parking runs"
+grep -cxF 'parkreminder show' "$llog" >/dev/null || fail "Parkplatz shows the last parked-at point"
+launchrun audiobooks </dev/null || fail "tile-launch.sh audiobooks runs"
+grep -cxF audiobookshelf-open "$llog" >/dev/null || fail "Audiobookshelf opens the web client"
+rc=0; launchrun nope </dev/null 2>/dev/null || rc=$?
+[ "$rc" = 2 ] || fail "an unknown car-app tile is refused with status 2"
+# The terminal waits for Enter before it closes, as the notfall entry does.
+grep -c 'Enter zum Schliessen' "$launch" >/dev/null || fail "the car-app terminal waits for Enter"
+pass "car-app tiles run their CLI with the answers they ask for"

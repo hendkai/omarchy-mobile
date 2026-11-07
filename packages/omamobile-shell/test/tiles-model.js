@@ -76,9 +76,16 @@ test("parseList takes JSON or space- and comma-separated ids", () => {
   assert.strictEqual(M.parseList("wifi; rm"), null)
 })
 
+test("the car-app launchers are catalog-only, never in the default layout", () => {
+  for (const id of ["charge", "trips", "parking", "audiobooks"]) {
+    assert.ok(M.known(id), id)
+    assert.ok(!M.DEFAULT_LAYOUT.includes(id), id)
+  }
+})
+
 test("available lists the hidden tiles in catalog order", () => {
   const spare = M.available(M.defaults())
-  assert.deepStrictEqual(spare, ["hotspot", "stay-awake", "mic", "screenshot", "screen-record"])
+  assert.deepStrictEqual(spare, ["hotspot", "stay-awake", "mic", "screenshot", "screen-record", "charge", "trips", "parking", "audiobooks"])
   assert.strictEqual(M.available([]).length, M.CATALOG.length)
   assert.deepStrictEqual(M.available(M.CATALOG.map((t) => t.id)), [])
 })

@@ -33,7 +33,13 @@ var CATALOG = [
   { id: "fingerprint", label: "Fingerprint" },
   { id: "keyboard", label: "Keyboard" },
   { id: "clipboard", label: "Clipboard" },
-  { id: "dictation", label: "Dictation" }
+  { id: "dictation", label: "Dictation" },
+  // Car-app launchers (tile-launch.sh): offered under Add tiles, never in the
+  // default layout, so the default sheet stays as it was.
+  { id: "charge", label: "Ladeplaner" },
+  { id: "trips", label: "Fahrtenbuch" },
+  { id: "parking", label: "Parkplatz" },
+  { id: "audiobooks", label: "Audiobookshelf" }
 ]
 
 // The first four are the collapsed sheet's row, as on Android: the toggles

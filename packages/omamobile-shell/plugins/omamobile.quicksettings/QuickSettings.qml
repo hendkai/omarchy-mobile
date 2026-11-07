@@ -226,7 +226,8 @@ Item {
     "location": location, "nfc": nfc, "battery-saver": batterySaver, "dark-theme": darkTheme,
     "night-light": nightLight, "stay-awake": stayAwake, "mic": mic, "screenshot": screenshot,
     "screen-record": screenRecord, "fingerprint": fingerprint, "keyboard": keyboard,
-    "clipboard": clipboard, "dictation": dictation
+    "clipboard": clipboard, "dictation": dictation,
+    "charge": charge, "trips": trips, "parking": parking, "audiobooks": audiobooks
   })
 
   // ---------------------------------------------------------------- layout
@@ -588,6 +589,59 @@ Item {
       var start = !enabled
       root.runTileAction("dictation", start)
       if (start) root.dismiss()
+    }
+  }
+
+  // Ladeplaner (omamobile-chargeplanner): the sheet goes away, tile-launch.sh runs
+  // the planner in a terminal. Not in the default layout; added under Add tiles.
+  QtObject {
+    id: charge
+    readonly property bool available: true
+    readonly property bool enabled: false
+    readonly property string icon: "\uDB80\uDC84"
+    readonly property string status: "Plan"
+    function toggle() {
+      root.dismiss()
+      Quickshell.execDetached(["sh", root.scriptPath("tile-launch.sh"), "charge"])
+    }
+  }
+
+  // Fahrtenbuch (omamobile-fahrtenbuch): the monthly export, in a terminal.
+  QtObject {
+    id: trips
+    readonly property bool available: true
+    readonly property bool enabled: false
+    readonly property string icon: "\uDB80\uDD0B"
+    readonly property string status: "Export"
+    function toggle() {
+      root.dismiss()
+      Quickshell.execDetached(["sh", root.scriptPath("tile-launch.sh"), "trips"])
+    }
+  }
+
+  // Parkplatz (omamobile-parkreminder): the last parked-at point, in a terminal.
+  QtObject {
+    id: parking
+    readonly property bool available: true
+    readonly property bool enabled: false
+    readonly property string icon: "\uDB81\uDD95"
+    readonly property string status: "Last spot"
+    function toggle() {
+      root.dismiss()
+      Quickshell.execDetached(["sh", root.scriptPath("tile-launch.sh"), "parking"])
+    }
+  }
+
+  // Audiobookshelf: the web client (audiobookshelf-open).
+  QtObject {
+    id: audiobooks
+    readonly property bool available: true
+    readonly property bool enabled: false
+    readonly property string icon: "\uDB80\uDECB"
+    readonly property string status: "Open"
+    function toggle() {
+      root.dismiss()
+      Quickshell.execDetached(["sh", root.scriptPath("tile-launch.sh"), "audiobooks"])
     }
   }
 

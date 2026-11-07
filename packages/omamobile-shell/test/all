@@ -342,6 +342,12 @@ fi
 # The quick-settings tile scripts, against fake commands.
 sh -n plugins/omamobile.quicksettings/tile-state.sh || fail "tile-state.sh parses"
 sh -n plugins/omamobile.quicksettings/tile-action.sh || fail "tile-action.sh parses"
+sh -n plugins/omamobile.quicksettings/tile-launch.sh || fail "tile-launch.sh parses"
+# The car-app launcher tiles: each has a backend that runs tile-launch.sh with its id.
+for id in charge trips parking audiobooks; do
+  grep -cF 'root.scriptPath("tile-launch.sh"), "'"$id"'"])' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null ||
+    fail "the $id tile launches through tile-launch.sh"
+done
 bash test/tile-scripts.sh || fail "quick-settings tile scripts"
 
 # The Bluetooth pairing helper parses, and its pure parts work without D-Bus.
