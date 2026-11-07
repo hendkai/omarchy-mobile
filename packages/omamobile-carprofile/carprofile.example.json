@@ -7,7 +7,9 @@
   "commands": {
     "park-reminder": "/usr/bin/parkreminder trigger",
     "navi-aa": "/usr/bin/systemctl start snaildrive-android-auto-phone.service",
-    "navi-aa-stop": "/usr/bin/systemctl stop snaildrive-android-auto-phone.service"
+    "navi-aa-stop": "/usr/bin/systemctl stop snaildrive-android-auto-phone.service",
+    "fahrtenbuch-start": "/usr/bin/fahrtenbuch start",
+    "fahrtenbuch-end": "/usr/bin/fahrtenbuch end"
   },
   "timeout_s": 20
 }
