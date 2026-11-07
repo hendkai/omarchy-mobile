@@ -1,0 +1,36 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-carprofile into DESTDIR. Bündelt nichts: das car-Profil ist
+# aktiviert erst nach Hendriks OK am Geraet (kein Phone-I/O ohne OK). Stellt nur
+# die Dateien bereit, die ein Geräte-Operator zur Aktivierung der udev-Regel
+# braucht.
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+
+put() { install -d -- "$(dirname -- "$3")" && install -m "$1" -- "$2" "$3"; }
+
+# carprofile App-Paket: python-Paket carprofile/ unter dem app-Ordner, so dass
+# `python3 -m carprofile.trigger` (bzw. `carprofile-trigger`) funktioniert.
+for f in __init__ detect profile trigger; do
+  put 644 "carprofile/$f.py" "$d/usr/share/omamobile-carprofile/carprofile/$f.py"
+done
+
+# Trigger-Einstiegspunkt (wird von carprofile-dispatch im User-Manager des
+# Fahrers aufgerufen)
+put 755 carprofile-trigger "$d/usr/bin/carprofile-trigger"
+# Dispatcher: udev-Regel -> root -> systemd-run --user --machine=<fahrer>@.host
+put 755 carprofile-dispatch "$d/usr/bin/carprofile-dispatch"
+
+# udev-Regel: ausgeliefert, aber INAKTIV (nicht nach /usr/lib/udev/rules.d,
+# dort wäre sie mit dem Paket sofort aktiv). Aktivierung = Hendriks OK am
+# Geraet, dann Symlink nach /etc/udev/rules.d/99-carprofile.rules.
+put 644 udev/99-carprofile.rules "$d/usr/share/omamobile-carprofile/udev/99-carprofile.rules"
+
+# Beispiel-Konfiguration
+put 644 carprofile.example.json "$d/usr/share/omamobile-carprofile/carprofile.example.json"
+
+# Version des carprofile-Teils
+put 644 version "$d/usr/share/omamobile-carprofile/version"

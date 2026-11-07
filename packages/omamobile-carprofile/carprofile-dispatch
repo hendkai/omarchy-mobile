@@ -1,0 +1,59 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# carprofile-dispatch: udev -> System-Manager (root) -> User-Manager des Fahrers.
+#
+# Aufruf (aus der udev-Regel ueber systemd-run, als root):
+#   carprofile-dispatch add|remove
+#
+# Startet carprofile-trigger als transiente Unit im systemd-User-Manager des
+# Fahrers (systemd-run --user --machine=<user>@.host). Grund: Benachrichtigungen
+# und die Zustandsdatei (~/.local/state/carprofile) gehoeren dem Fahrer, nicht
+# root. Ohne laufende User-Session schlaegt der Aufruf fehl (kein Fallback auf
+# den System-Manager).
+#
+# Benutzer: CARPROFILE_USER aus der Umgebung, sonst aus $CARPROFILE_DEFAULTS
+# (Standard /etc/default/carprofile). Ungueltig oder leer -> Exit 2.
+#
+# udev-Variablen (DEVPATH, ID_VENDOR_ID, ID_MODEL_ID, PRODUCT) kommen per
+# systemd-run --setenv in diese Umgebung und werden an den Trigger weitergereicht
+# (systemd-run gibt die udev-Umgebung nicht selbst weiter).
+#
+# Test-Hooks: CARPROFILE_SYSTEMD_RUN, CARPROFILE_TRIGGER, CARPROFILE_DEFAULTS.
+set -eu
+
+action=${1:-}
+case $action in
+  add|remove) ;;
+  *) echo "carprofile-dispatch: Aufruf: add|remove" >&2; exit 2 ;;
+esac
+
+user=${CARPROFILE_USER:-}
+if [ -z "$user" ]; then
+  defaults=${CARPROFILE_DEFAULTS:-/etc/default/carprofile}
+  if [ -r "$defaults" ]; then
+    # shellcheck disable=SC1090
+    . "$defaults"
+    user=${CARPROFILE_USER:-}
+  fi
+fi
+case $user in
+  ''|*[!a-z0-9_-]*)
+    echo "carprofile-dispatch: CARPROFILE_USER fehlt oder ungueltig (in /etc/default/carprofile setzen)" >&2
+    exit 2 ;;
+esac
+
+sr=${CARPROFILE_SYSTEMD_RUN:-/usr/bin/systemd-run}
+trigger=${CARPROFILE_TRIGGER:-/usr/bin/carprofile-trigger}
+
+set -- "$sr" --user "--machine=$user@.host" --wait --collect \
+  "--unit=carprofile-$action-$(date +%s)-$$"
+
+for v in DEVPATH ID_VENDOR_ID ID_MODEL_ID PRODUCT; do
+  eval "val=\${$v-}"
+  if [ -n "$val" ]; then
+    set -- "$@" "--setenv=$v=$val"
+  fi
+done
+
+set -- "$@" "$trigger" "$action" --json
+exec "$@"

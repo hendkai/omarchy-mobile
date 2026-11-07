@@ -1,0 +1,9 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Kleiner Einstieg fuer den carprofile-Trigger (von der udev-Regel + systemd-run).
+# Ruft das trigger-Modul des carprofile-App-Pakets mit den uebergebenen
+# Argumenten auf. Das App-Paket liegt lokal unter
+#   /usr/share/omamobile-carapps/carprofile/
+# (das das Install-Skript von omamobile-carapps auspackt).
+cd /usr/share/omamobile-carapps/carprofile || exit 1
+exec python3 -m carprofile.trigger "$@"

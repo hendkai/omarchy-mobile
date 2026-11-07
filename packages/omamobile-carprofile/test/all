@@ -1,0 +1,16 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# carprofile checks: der Trigger parst, danach die phone-freien unittest
+# (stdlib unittest, udev-Events simuliert). Run by check() and by hand:
+#   bash test/all            (von irgendwo aus)
+set -euo pipefail
+here=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)/..
+cd -- "$here"
+
+for f in __init__ detect profile trigger; do
+  python3 -m py_compile "carprofile/$f.py"
+done
+echo "ok - carprofile/*.py parsen"
+
+PYTHONPATH="$here" python3 -m unittest discover -s tests -p 'test_*.py' -v
+echo "carprofile: ok"

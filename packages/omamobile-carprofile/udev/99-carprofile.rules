@@ -1,0 +1,23 @@
+# udev-Regeln fuer das car-Profil (Phone, P4+). Nicht im Repo aktiv installiert:
+# Installation erst nach Hendriks OK am Geraet.
+#
+# Eine Regel-Datei fuer BEIDE Richtungen; parkreminder hat KEINEN eigenen
+# udev-Trigger mehr (DESIGN.md Punkt 3 -> Kette in carprofile.profile).
+#
+# add:    nur AOA-Accessory (18d1:2d00 / 2d01) startet die Sitzung.
+# remove: jedes USB-Geraet-Remove wird weitergereicht; der Trigger beendet nur
+#         eine Sitzung, deren Geraet (DEVPATH/ID) passt -> sonst noop.
+#
+# Ablauf: udev -> systemd-run (System-Manager, root, --no-block) ->
+#         carprofile-dispatch -> systemd-run --user --machine=<fahrer>@.host ->
+#         carprofile-trigger. Der Trigger laeuft im User-Manager des Fahrers
+#         (Benachrichtigung, ~/.local/state). Fahrer: CARPROFILE_USER in
+#         /etc/default/carprofile.
+# systemd-run --no-block: udev blockiert nicht, Lauf als eigene Unit.
+# systemd-run gibt die udev-Umgebung NICHT weiter -> --setenv explizit setzen.
+#
+# Pfad anpassen, falls carprofile-dispatch woanders liegt.
+
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="18d1", ATTR{idProduct}=="2d0[01]", RUN{program}+="/usr/bin/systemd-run --no-block --collect --unit=carprofile-add-%k --setenv=DEVPATH=%p --setenv=ID_VENDOR_ID=$attr{idVendor} --setenv=ID_MODEL_ID=$attr{idProduct} /usr/bin/carprofile-dispatch add"
+
+ACTION=="remove", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", RUN{program}+="/usr/bin/systemd-run --no-block --collect --unit=carprofile-remove-%k --setenv=DEVPATH=%p --setenv=PRODUCT=$env{PRODUCT} /usr/bin/carprofile-dispatch remove"
