@@ -46,6 +46,72 @@ assert d["stations"][0]["ccs"] is True, d
 PY
 echo "ok - Abfrage: nur die in Betrieb befindliche Nahstation, CCS erkannt"
 
+# --- SoC-Quelle mercedes: read-only Statusdatei, synthetisch, kein Netz ---
+# The status file mimics the connector's redacted status.json (no VIN, no
+# token). Every case runs against the synthetic register above.
+now=$(python3 -c 'import time; print(int(time.time() * 1000))')
+st="$tmp/status.json"
+printf '{"state":"ok","soc_percent":40,"range_km":150,"written_at_ms":%s}' "$now" >"$st"
+
+expect_fail() { # expect_fail "<stderr grep>" command...
+  local want=$1; shift
+  if "$@" >/dev/null 2>"$tmp/err"; then return 1; fi
+  grep -q -- "$want" "$tmp/err"
+}
+
+python3 chargeplanner.py 48.0 9.0 --soc-source mercedes --mercedes-status-cache "$st" >"$tmp/m.json"
+python3 - "$tmp/m.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["soc_pct"] == 40.0 and d["soc_source"] == "mercedes", d
+assert "vin" not in json.dumps(d).lower(), d
+PY
+echo "ok - SoC aus der Mercedes-Statusdatei, Quelle steht im Ergebnis, keine VIN-Felder"
+
+printf '{"state":"no-session","written_at_ms":%s}' "$now" >"$tmp/nosess.json"
+python3 chargeplanner.py 48.0 9.0 --soc-source mercedes --mercedes-status-cache "$tmp/nosess.json" --soc 40 >"$tmp/fb.json" 2>"$tmp/fb.err"
+python3 - "$tmp/fb.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["soc_pct"] == 40.0 and d["soc_source"] == "manual-fallback", d
+PY
+echo "ok - Connector ohne Sitzung (no-session): --soc als Fallback"
+
+expect_fail "--soc" python3 chargeplanner.py 48.0 9.0 --soc-source mercedes --mercedes-status-cache "$tmp/nosess.json" \
+  || { echo "not ok - no-session ohne --soc muss mit Hinweis abbrechen"; exit 1; }
+echo "ok - Connector ohne Sitzung ohne --soc: Abbruch mit Hinweis"
+
+printf '{"state":"ok","soc_percent":null,"written_at_ms":%s}' "$now" >"$tmp/null.json"
+expect_fail "Ladestand" python3 chargeplanner.py 48.0 9.0 --soc-source mercedes --mercedes-status-cache "$tmp/null.json" \
+  || { echo "not ok - soc_percent null darf nie zu 0 werden"; exit 1; }
+python3 chargeplanner.py 48.0 9.0 --soc-source mercedes --mercedes-status-cache "$tmp/null.json" --soc 30 >"$tmp/n.json" 2>/dev/null
+python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d['soc_pct']==30.0, d" "$tmp/n.json"
+echo "ok - soc_percent null: kein Ladestand 0 %, sondern Fehler bzw. --soc"
+
+expect_fail "Statusdatei nicht lesbar" python3 chargeplanner.py 48.0 9.0 --soc-source mercedes --mercedes-status-cache "$tmp/none.json" \
+  || { echo "not ok - fehlende Statusdatei ohne --soc muss abbrechen"; exit 1; }
+echo "ok - fehlende Statusdatei: klare Meldung, kein erfundener SoC"
+
+printf '{"state":"ok","soc_percent":60,"written_at_ms":%s}' "$((now - 7200000))" >"$tmp/old.json"
+python3 chargeplanner.py 48.0 9.0 --soc-source mercedes --mercedes-status-cache "$tmp/old.json" >"$tmp/o.json" 2>"$tmp/o.err"
+grep -q "alt" "$tmp/o.err" || { echo "not ok - veralteter Status braucht eine Warnung"; exit 1; }
+python3 -c "import json,sys; assert json.load(open(sys.argv[1]))['soc_pct']==60.0" "$tmp/o.json"
+echo "ok - veralteter Mercedes-Status: Warnung, Wert bleibt sichtbar"
+
+printf 'SOC_SOURCE=mercedes\nMERCEDES_STATUS_CACHE=%s\n' "$st" >"$tmp/mc.conf"
+CHARGEPLANNER_CONFIG="$tmp/mc.conf" python3 chargeplanner.py 48.0 9.0 >"$tmp/c.json"
+python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d['soc_source']=='mercedes' and d['soc_pct']==40.0, d" "$tmp/c.json"
+echo "ok - SOC_SOURCE und MERCEDES_STATUS_CACHE aus der Konfiguration"
+
+printf 'SOC_SOURCE=bluetooth\n' >"$tmp/bad.conf"
+expect_fail "unbekannt" env CHARGEPLANNER_CONFIG="$tmp/bad.conf" python3 chargeplanner.py 48.0 9.0 \
+  || { echo "not ok - unbekannte SOC_SOURCE muss abbrechen"; exit 1; }
+echo "ok - unbekannte SOC_SOURCE: Abbruch"
+
+expect_fail "--soc" python3 chargeplanner.py 48.0 9.0 --soc-source manual \
+  || { echo "not ok - manual ohne --soc muss abbrechen"; exit 1; }
+echo "ok - manual ohne --soc: Abbruch mit Hinweis"
+
 # Ohne Datei und ohne URL: klare Meldung, Abbruch mit Code != 0.
 rm -f "$tmp/ladesaeulenregister.csv"
 if python3 chargeplanner.py 48.0 9.0 --soc 40 >/dev/null 2>"$tmp/err"; then

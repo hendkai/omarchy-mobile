@@ -7,13 +7,22 @@ NICHT im Paket: es wird beim ersten Lauf bzw. per Timer (monatlich) aus
 REGISTER_URL geladen. Kein API-Key, offline nutzbar, sobald es da ist.
 
 Bewertet die Erreichbarkeit nach SoC und sortiert nach Nutzen (Leistung,
-Distanz, Fahrtrichtung, CCS). SoC-Quelle: --soc (manuell). Die
-Mercedes-Anbindung (omarchy-mercedes, read-only) ist eine Folgekarte.
+Distanz, Fahrtrichtung, CCS).
+
+SoC-Quelle (--soc-source, Config SOC_SOURCE):
+  manual    --soc PROZENT (Standard)
+  mercedes  Statusdatei des omarchy-mercedes-Connectors (read-only). Der
+            Connector ist der einzige Teil, der mit der Mercedes-API spricht;
+            hier wird nur seine Statusdatei gelesen: kein Netz, kein Token,
+            keine VIN, keine Fahrzeugbefehle. Ohne brauchbare Daten wird
+            --soc als Fallback genutzt, sonst bricht der Lauf ab. Nie 0 %.
 
 Konfiguration (KEY=VALUE, keine Shell):
   /etc/chargeplanner.conf            (Paket-Default, Vorlage)
   ~/.config/chargeplanner.conf       (Override)
   REGISTER_URL=<CSV-Link der BNetzA>
+  SOC_SOURCE=manual|mercedes
+  MERCEDES_STATUS_CACHE=<Pfad zu status.json>   (Standard: ~/.local/state/omarchy-mercedes/status.json)
   Umgebung: CHARGEPLANNER_CONFIG, CHARGEPLANNER_DATA_DIR, CHARGEPLANNER_REGISTER_URL
 
 Datenort (erste Treffer): CHARGEPLANNER_DATA_DIR; /var/lib/chargeplanner
@@ -39,6 +48,77 @@ MAX_AGE_DAYS = 25  # der monatliche Timer holt das Register vor Ablauf neu
 REGISTER_NAME = "ladesaeulenregister.csv"
 SYSTEM_DATA_DIR = Path("/var/lib/chargeplanner")
 CORRIDOR_DEFAULT_KM = 30.0
+SOC_SOURCES = ("manual", "mercedes")
+DEFAULT_MERCEDES_CACHE = "~/.local/state/omarchy-mercedes/status.json"
+MERCEDES_STALE_S = 1800.0  # wie der Connector: aelter als 30 min ist der SoC veraltet
+MERCEDES_UNUSABLE_STATES = ("no-session", "error")
+
+
+class SocSourceError(Exception):
+    """Die Mercedes-Statusdatei liefert keinen brauchbaren Ladestand."""
+
+
+def read_mercedes_status(path: Path) -> dict:
+    """Read-only: Ladestand und Alter aus der Statusdatei des Connectors.
+
+    Gibt {"soc": float, "range_km": float|None, "written_ms": int|None} zurueck
+    oder wirft SocSourceError. Ein fehlender, kaputter oder unbrauchbarer
+    Status wird nie als 0 % oder als erfundener Wert uebernommen.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise SocSourceError(f"Statusdatei nicht lesbar ({path}): {exc.strerror}") from exc
+    except ValueError as exc:
+        raise SocSourceError(f"Statusdatei ist kein gueltiges JSON ({path})") from exc
+    if not isinstance(raw, dict):
+        raise SocSourceError(f"Statusdatei hat kein JSON-Objekt ({path})")
+    state = raw.get("state")
+    if state in MERCEDES_UNUSABLE_STATES:
+        raise SocSourceError(f"Connector meldet state={state!r}, kein Ladestand verfuegbar")
+    soc = raw.get("soc_percent")
+    if soc is None:
+        raise SocSourceError("Fahrzeug liefert keinen Ladestand (soc_percent fehlt)")
+    if isinstance(soc, bool) or not isinstance(soc, (int, float)):
+        raise SocSourceError(f"soc_percent ist keine Zahl: {soc!r}")
+    rng = raw.get("range_km")
+    if rng is not None and (isinstance(rng, bool) or not isinstance(rng, (int, float))):
+        rng = None  # Reichweite ist nur Anzeige; ein unbrauchbarer Wert bricht nichts ab
+    written = raw.get("written_at_ms")
+    return {
+        "soc": float(soc),
+        "range_km": None if rng is None else float(rng),
+        "written_ms": int(written) if isinstance(written, (int, float)) and not isinstance(written, bool) else None,
+    }
+
+
+def resolve_soc(a, cfg: dict) -> tuple[float, str]:
+    """(soc_prozent, quelle). Wirft SystemExit mit klarer Meldung, wenn keine Quelle taugt."""
+    source = a.soc_source or cfg.get("SOC_SOURCE", "manual")
+    if source not in SOC_SOURCES:
+        raise SystemExit(f"chargeplanner: SOC_SOURCE={source!r} unbekannt (manual|mercedes)")
+    if source == "manual":
+        if a.soc is None:
+            raise SystemExit("chargeplanner: --soc PROZENT ist noetig (SOC_SOURCE=manual)")
+        return a.soc, "manual"
+
+    cache_raw = a.mercedes_status_cache or cfg.get("MERCEDES_STATUS_CACHE") or DEFAULT_MERCEDES_CACHE
+    cache = Path(os.path.expanduser(cache_raw))
+    try:
+        st = read_mercedes_status(cache)
+    except SocSourceError as exc:
+        if a.soc is not None:
+            print(f"chargeplanner: Mercedes-Quelle nicht nutzbar ({exc}); nutze --soc {a.soc:g}.",
+                  file=sys.stderr)
+            return a.soc, "manual-fallback"
+        raise SystemExit(f"chargeplanner: Mercedes-Quelle nicht nutzbar: {exc}. "
+                         f"Mit --soc PROZENT als Fallback starten.")
+    if st["written_ms"] is not None:
+        age = time.time() - st["written_ms"] / 1000.0
+        if age > MERCEDES_STALE_S:
+            print(f"chargeplanner: Mercedes-Status ist {int(age // 60)} min alt; SoC kann veraltet sein.",
+                  file=sys.stderr)
+    return st["soc"], "mercedes"
 
 
 def read_config() -> dict:
@@ -200,7 +280,11 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="chargeplanner")
     p.add_argument("lat", type=float, nargs="?")
     p.add_argument("lon", type=float, nargs="?")
-    p.add_argument("--soc", type=float, help="Ladestand in Prozent")
+    p.add_argument("--soc", type=float, help="Ladestand in Prozent (manual; bei mercedes Fallback)")
+    p.add_argument("--soc-source", choices=SOC_SOURCES, default=None,
+                   help="SoC-Quelle (Standard: SOC_SOURCE aus der Konfiguration, sonst manual)")
+    p.add_argument("--mercedes-status-cache", default=None,
+                   help="Statusdatei des omarchy-mercedes-Connectors (read-only)")
     p.add_argument("--heading", type=float, default=None, help="Fahrtrichtung 0-360")
     p.add_argument("--radius", type=float, default=CORRIDOR_DEFAULT_KM)
     p.add_argument("--refresh-register", action="store_true",
@@ -215,10 +299,12 @@ def main(argv=None) -> int:
         ensure_register(reg, url)
         print(f"chargeplanner: Register {reg}")
         return 0
-    if a.lat is None or a.lon is None or a.soc is None:
-        p.error("lat lon --soc sind noetig")
+    if a.lat is None or a.lon is None:
+        p.error("lat und lon sind noetig")
+    soc, source = resolve_soc(a, cfg)
     ensure_register(reg, url)
-    res = plan(reg, (a.lat, a.lon), a.soc, a.heading, a.radius)
+    res = plan(reg, (a.lat, a.lon), soc, a.heading, a.radius)
+    res["soc_source"] = source
     print(json.dumps(res, ensure_ascii=False, indent=1))
     return 0
 
