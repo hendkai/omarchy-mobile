@@ -282,20 +282,31 @@ for f in "${FAT_IMGS[@]}"; do
     done < <(find "$WORK/bd" -type f 2>/dev/null)
   done
 done
-if [[ $found == 1 ]]; then
-  say "Staged $(ls "$board" | tr '\n' ' ')to $OUT/wifi-board/"
-  cat <<NOTE
-
-  Pack ath11k's board-2.bin by hand (ath11k-bdencoder needs a JSON manifest;
-  qca-swiss-army-knife tools/scripts/ath11k/ath11k-bdencoder):
-    ath11k-bdencoder -c board.json -o board-2.bin
-  with one entry per file in wifi-board/, named for the device tree's
-  calibration variant, then install to
-    /lib/firmware/ath11k/WCN6750/hw1.0/board-2.bin
-  Until then ath11k uses linux-firmware's generic board-2.bin (the
-  Qualcomm_rb3gen2 data): WiFi works, radio calibration is generic.
-  The board data is factory radio calibration: never commit or share it.
-NOTE
+if [[ $found == 1 && -s $board/bdwlan.bin ]]; then
+  # The phone's OTP carries no board id (ath11k asks for qmi-board-id=255)
+  # and linux-firmware's WCN6750 board-2.bin has no entry for it, so without
+  # this the WiFi device never appears (verified on hardware 2026-11-07).
+  # Pack the stock default calibration, bdwlan.bin, under both names ath11k
+  # tries: the DT variant first, then the bare board id.
+  bdir=$OUT/$DEST_REL/ath11k/WCN6750/hw1.0
+  mkdir -p "$bdir"
+  python3 -I - "$board/bdwlan.bin" "$bdir/board-2.bin" <<'PY'
+import struct, sys
+pad = lambda b: b + b"\0" * (-len(b) % 4)
+ie = lambda i, d: struct.pack("<II", i, len(d)) + pad(d)
+data = open(sys.argv[1], "rb").read()
+out = pad(b"QCA-ATH11K-BOARD\0")
+for name in (b"bus=ahb,qmi-chip-id=1,qmi-board-id=255,variant=Nothing_Spacewar",
+             b"bus=ahb,qmi-chip-id=1,qmi-board-id=255"):
+    out += ie(0, ie(0, name) + ie(1, data))   # BOARD { NAME, DATA }
+open(sys.argv[2], "wb").write(out)
+PY
+  [[ -s $board/regdb.bin ]] && cp "$board/regdb.bin" "$bdir/regdb.bin"
+  chmod 0644 "$bdir"/*
+  printf '  -> /%s/ath11k/WCN6750/hw1.0/{board-2.bin,regdb.bin}\n' "$DEST_REL"
+  echo "  The board data is factory radio calibration: never commit or share it."
+elif [[ $found == 1 ]]; then
+  say "Staged $(ls "$board" | tr '\n' ' ')to $OUT/wifi-board/, but no bdwlan.bin to pack"
 else
   say "No bdwlan/regdb found in the FAT partitions; ath11k keeps linux-firmware's generic board-2.bin"
 fi
