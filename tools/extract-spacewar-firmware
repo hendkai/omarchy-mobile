@@ -233,8 +233,11 @@ stage adsp.mbn      "adsp.mbn"           "adsp.mbn"    || missing=1
 stage cdsp.mbn      "cdsp.mbn"           "cdsp.mbn"    || missing=1
 stage wpss.mbn      "wpss.mbn"           "wpss.mbn"    || missing=1
 stage vpu20_1v.mbn  "vpu20_1v.mbn vpu.mbn" "vpu20_1v.mbn" || missing=1
-stage ipa_fws.mbn   "ipa_fws.mbn"        "ipa_fws.b00" || missing=1
-stage a660_zap.mbn  "a660_zap.mbn"       "a660_zap.b00" || missing=1
+# /vendor/firmware carries these split (.mdt/.b00 hold only the ELF headers,
+# the kernel then fails with "error -2 loading <name>.b01") and as one whole
+# .elf: take the .elf, which the loader reads as a single mbn.
+stage ipa_fws.mbn   "ipa_fws.mbn"        "yupik_ipa_fws.elf ipa_fws.elf" || missing=1
+stage a660_zap.mbn  "a660_zap.mbn"       "a660_zap.elf" || missing=1
 stage focaltech_ts_novatek.bin "" "focaltech_ts_novatek.bin focaltech_fts.bin" || true
 
 say "Remoteproc JSON sidecars"
