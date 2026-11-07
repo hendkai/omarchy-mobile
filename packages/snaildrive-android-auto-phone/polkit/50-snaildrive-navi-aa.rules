@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Car profile: let the active local user in wheel start and stop
+// Car profile: let a wheel user start, stop and restart
 // snaildrive-android-auto-phone.service when the phone goes in or out of the
-// car (carprofile-dispatch runs in the user manager). Nothing else.
+// car. Nothing else. No subject.local/active: carprofile-dispatch calls
+// systemctl from the user manager (systemd-run --user), which has no logind
+// session, so both would be false there. wheel can sudo anyway; this only
+// spares the password prompt for this one unit.
 polkit.addRule(function(action, subject) {
   if (action.id == "org.freedesktop.systemd1.manage-units" &&
-      subject.local && subject.active && subject.isInGroup("wheel") &&
+      subject.isInGroup("wheel") &&
       action.lookup("unit") == "snaildrive-android-auto-phone.service" &&
       /^(start|stop|restart)$/.test(action.lookup("verb"))) {
     return polkit.Result.YES;
