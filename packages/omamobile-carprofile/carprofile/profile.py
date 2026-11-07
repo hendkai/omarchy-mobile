@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
+from . import notify
 from .detect import DetectConfig, UsbId, classify, parse_extra_ids, usb_id_from_env
 
 CONNECT_DEFAULT = ["display-minimal", "chargeplanner", "fahrtenbuch-start", "navi-aa"]
@@ -39,6 +40,9 @@ PARK_COMMAND_DEFAULT = "/usr/local/bin/parkreminder trigger"
 @dataclass
 class Config:
     apply: bool = False
+    # Sichtbare Hinweise (notify-send) bei Profil an/aus. Unabhaengig von
+    # ``apply``: ein Hinweis steuert kein Fahrzeug und kein Geraet.
+    notify: bool = True
     extra_car_ids: List[str] = field(default_factory=list)
     connect: List[str] = field(default_factory=lambda: list(CONNECT_DEFAULT))
     disconnect: List[str] = field(default_factory=lambda: list(DISCONNECT_DEFAULT))
@@ -51,7 +55,7 @@ class Config:
         if path is None or not path.exists():
             return cfg
         data = json.loads(path.read_text(encoding="utf-8"))
-        for key in ("apply", "extra_car_ids", "connect", "disconnect", "commands", "timeout_s"):
+        for key in ("apply", "notify", "extra_car_ids", "connect", "disconnect", "commands", "timeout_s"):
             if key in data:
                 setattr(cfg, key, data[key])
         return cfg
@@ -169,8 +173,9 @@ def handle_add(env: dict, state_path: Path, cfg: Config, log: Logger = _stderr) 
     State(active=True, devpath=devpath, usb_id=str(verdict.usb_id),
           since=_now_iso(), reason=verdict.reason,
           boot_id=current_boot_id()).save(state_path)
+    notice = notify.send("profile_on", cfg.notify, log)
     return {"event": "add", "outcome": "started",
-            "actions": [r.__dict__ for r in results]}
+            "actions": [r.__dict__ for r in results], "notice": notice}
 
 
 def _remove_matches(env: dict, state: State) -> bool:
@@ -193,9 +198,10 @@ def handle_remove(env: dict, state_path: Path, cfg: Config, log: Logger = _stder
     log("kfz-anschluss getrennt -> car-Profil beenden")
     results = [run_action(n, cfg, log) for n in cfg.disconnect]
     State(active=False, since=_now_iso()).save(state_path)
+    notice = notify.send("profile_off", cfg.notify, log)
     failed = [r.name for r in results if r.status == "failed"]
     return {"event": "remove", "outcome": "ended" if not failed else "ended-with-errors",
-            "failed": failed, "actions": [r.__dict__ for r in results]}
+            "failed": failed, "actions": [r.__dict__ for r in results], "notice": notice}
 
 
 def default_state_path() -> Path:

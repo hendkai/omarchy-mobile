@@ -14,7 +14,7 @@ put() { install -d -- "$(dirname -- "$3")" && install -m "$1" -- "$2" "$3"; }
 
 # carprofile App-Paket: python-Paket carprofile/ unter dem app-Ordner, so dass
 # `python3 -m carprofile.trigger` (bzw. `carprofile-trigger`) funktioniert.
-for f in __init__ detect profile trigger; do
+for f in __init__ detect notify profile trigger; do
   put 644 "carprofile/$f.py" "$d/usr/share/omamobile-carprofile/carprofile/$f.py"
 done
 

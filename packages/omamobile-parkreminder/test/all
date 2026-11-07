@@ -57,6 +57,25 @@ echo "ok - modemmanager allein: kein Fix ohne Modem, Exit 1"
 python3 -m unittest -q test_position || { echo "not ok - parkreminder Positions-Tests"; exit 1; }
 echo "ok - Positions-Tests: Modem-Fix, Fallback auf lasttrip"
 
+python3 -m unittest -q test_notify || { echo "not ok - parkreminder Hinweis-Tests"; exit 1; }
+echo "ok - Hinweis 'Standort gemerkt': fester Text, ohne Koordinaten, Fehler nie fatal"
+
+# notify=desktop per PATH-Stub: der Trigger meldet "Standort gemerkt" (Text ohne Koordinaten).
+printf '[parkreminder]\nnotify = desktop\nsource = lasttrip\n' > "$PARKREMINDER_CONFIG"
+stub="$tmp/stub"; mkdir -p "$stub"
+cat >"$stub/notify-send" <<EOF
+#!/bin/sh
+printf '%s\n' "\$@" >>"$stub/argv"
+EOF
+chmod +x "$stub/notify-send"
+PATH="$stub:$PATH" python3 parkreminder.py trigger >/dev/null
+if grep -qx -- "Standort gemerkt" "$stub/argv" && grep -qx -- "Parkpunkt gespeichert" "$stub/argv"; then
+  echo "ok - notify-send per PATH-Stub: 'Standort gemerkt' gemeldet"
+else
+  echo "not ok - notify-send-Stub hat den Standort-Hinweis nicht gesehen"; exit 1
+fi
+rm -f "$PARKREMINDER_STATE/last_park.json"
+
 if python3 parkreminder.py show >/dev/null 2>&1; then echo "not ok - show ohne Datei"; exit 1; fi
 echo "ok - show ohne Parkpunkt meldet Fehlen"
 

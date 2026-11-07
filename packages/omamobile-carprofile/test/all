@@ -7,10 +7,30 @@ set -euo pipefail
 here=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)/..
 cd -- "$here"
 
-for f in __init__ detect profile trigger; do
+for f in __init__ detect notify profile trigger; do
   python3 -m py_compile "carprofile/$f.py"
 done
 echo "ok - carprofile/*.py parsen"
 
 PYTHONPATH="$here" python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+# notify-send per PATH-Stub: Anstecken meldet "car-Profil an", Abstecken "car-Profil aus".
+stub=$(mktemp -d)
+trap 'rm -rf "$stub"' EXIT
+cat >"$stub/notify-send" <<EOF
+#!/bin/sh
+printf '%s\n' "\$@" >>"$stub/argv"
+echo ---- >>"$stub/argv"
+EOF
+chmod +x "$stub/notify-send"
+st="$stub/state.json"; none="$stub/none.json"
+PATH="$stub:$PATH" python3 -m carprofile.trigger add --config "$none" --state "$st" \
+  --env DEVPATH=/devices/t/1-1 --env ID_VENDOR_ID=18d1 --env ID_MODEL_ID=2d00 >/dev/null 2>&1
+PATH="$stub:$PATH" python3 -m carprofile.trigger remove --config "$none" --state "$st" \
+  --env DEVPATH=/devices/t/1-1 >/dev/null 2>&1
+if grep -qx -- "car-Profil an" "$stub/argv" && grep -qx -- "car-Profil aus" "$stub/argv"; then
+  echo "ok - notify-send per PATH-Stub: an und aus gemeldet"
+else
+  echo "not ok - notify-send-Stub hat nicht beide Hinweise gesehen"; exit 1
+fi
 echo "carprofile: ok"

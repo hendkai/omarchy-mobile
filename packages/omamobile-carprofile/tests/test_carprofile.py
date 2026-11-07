@@ -20,6 +20,8 @@ PC_HUB = {"DEVPATH": "/devices/platform/usb1/1-3", "PRODUCT": "1d6b/2/606"}
 def cfg_dry(**kw):
     c = Config()
     c.apply = False
+    # Tests ohne echte Hinweise; die Hinweise sind in test_notify.py geprueft.
+    c.notify = False
     for k, v in kw.items():
         setattr(c, k, v)
     return c
@@ -150,6 +152,7 @@ class SessionTests(unittest.TestCase):
         self.assertTrue(cfg.apply)
         self.assertEqual(cfg.detect_config().extra_car_ids, (UsbId("abcd", "0123"),))
         self.assertEqual(cfg.connect[0], "display-minimal")
+        self.assertTrue(cfg.notify)
 
 
 if __name__ == "__main__":

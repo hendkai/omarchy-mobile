@@ -1,5 +1,6 @@
 {
   "apply": false,
+  "notify": true,
   "extra_car_ids": [],
   "connect": ["display-minimal", "chargeplanner", "fahrtenbuch-start", "navi-aa"],
   "disconnect": ["park-reminder", "navi-aa-stop", "fahrtenbuch-end", "profile-revert"],

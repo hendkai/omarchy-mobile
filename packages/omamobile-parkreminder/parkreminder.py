@@ -24,6 +24,7 @@ from __future__ import annotations
 import configparser
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -66,9 +67,10 @@ def load_config(path: Path) -> dict:
     if path.exists():
         cfg.read(path, encoding="utf-8")
     sect = cfg["parkreminder"] if cfg.has_section("parkreminder") else {}
-    notify = str(sect.get("notify", "none")).strip()
-    if notify not in ("none", "signal"):
-        notify = "none"
+    # desktop: notify-send-Hinweis "Standort gemerkt" (Standard).
+    notify = str(sect.get("notify", "desktop")).strip()
+    if notify not in ("none", "signal", "desktop"):
+        notify = "desktop"
     source = str(sect.get("source", "lasttrip")).strip() or "lasttrip"
     return {"notify": notify, "source": source}
 
@@ -142,6 +144,24 @@ def notify_hermes(text: str) -> None:
         pass
 
 
+def notify_desktop(title: str, body: str, runner=None, which=None) -> str:
+    """notify=desktop: freedesktop-Hinweis ueber notify-send. Fehler sind nie fatal.
+
+    Nur feste Texte, ohne Koordinaten (Datenschutz). Liefert den Status.
+    """
+    runner = runner or subprocess.run
+    which = which or shutil.which
+    if which("notify-send") is None:
+        return "skipped"
+    try:
+        proc = runner(["notify-send", "--app-name=parkreminder", "--urgency=low",
+                       "--expire-time=4000", "--icon=find-location", "--", title, body],
+                      capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return "failed"
+    return "sent" if proc.returncode == 0 else "failed"
+
+
 def trigger() -> int:
     cfg = load_config(config_path())
     point = locate(cfg["source"])
@@ -152,6 +172,8 @@ def trigger() -> int:
     path = save_park(point, state_dir())
     if cfg["notify"] == "signal":
         notify_hermes(f"Parkpunkt gespeichert ({point.get('source')}).")
+    elif cfg["notify"] == "desktop":
+        notify_desktop("Standort gemerkt", "Parkpunkt gespeichert")
     print(f"parkreminder: Parkpunkt -> {path}")
     return 0
 
