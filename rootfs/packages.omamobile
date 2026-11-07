@@ -15,8 +15,6 @@ omamobile-shell
 # Whisper's base.en for Voxtype, so voice works with no download
 omamobile-voice
 omacam
-# First-login bootstrap for the Hermes agent (P4 onboarding).
-omamobile-hermes
 omamobile-apps
 # Phone (with Contacts), Messages and the agent behind them; omamobile-apps
 # depends on them too, so phones installed earlier get them in an update.

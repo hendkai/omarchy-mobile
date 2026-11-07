@@ -1,66 +1,71 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# omamobile-hermes — idempotent first-login bootstrap for the Hermes agent.
+# omamobile-hermes: idempotent bootstrap for the Hermes agent on the phone
+# (HERMES-ONBOARDING.md §1-§5). Runs as the user, from the retry timer
+# (hermes-bootstrap.timer, every 60 s) and once from omamobile-setup-user:
 #
-# Runs as the user (omamobile-setup-user), typically at the first login after
-# the phone boots. The hermes-bootstrap.timer retries it every 60 s until the
-# network is up, so a first login before Wi-Fi retrieves the agent later.
+#   install  the official installer; if that fails, git + uv (ARM64 fallback)
+#   update   hermes update, every run
+#   config   API-only: model glm-5.3 on zai, key from GLM_API_KEY; no gateway
+#   serve    hermes.service (hermes serve, a user unit); then the timer stops
 #
-#   * Primary path:  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-#     (the installer sets up uv + venv + launcher in the user's home).
-#   * Fallback:      git clone + uv sync of the agent (ARM64 fallback).
-#   * Once installed: "hermes update --no-backup --yes" — the first time.
-#
-# Idempotent: a second run exits immediately after the first success.
-set -euo pipefail
+# Exit 0 once the agent works and is configured, 1 otherwise (the timer
+# runs it again). Nothing here reads or writes a secret: the LLM keys come
+# from the user's .env (scp'd from the Mac, runbook step); only names are set.
+set -uo pipefail
 
-home=${HOME:-$HOME}
-bin_dir=${HERMES_BIN_DIR:-$HOME/.local/bin}
-hermes=$bin_dir/hermes
-marker=$HOME/.local/state/omamobile/hermes-installed
-mkdir -p "$(dirname "$marker")"
+hermes=$HOME/.local/bin/hermes
+share=/usr/share/omamobile/hermes
+state=$HOME/.local/state/omamobile
+log() { echo "omamobile-hermes: $*"; }
+agent_ok() { [[ -x $hermes ]] && "$hermes" --version >/dev/null 2>&1; }
 
-# 0. Already installed and answering? Reconcile (update) and stop.
-if command -v hermes >/dev/null 2>&1 && "$hermes" --version >/dev/null 2>&1; then
-  "$hermes" update --no-backup --yes >/dev/null 2>&1 || true
-  exit 0
-fi
+if ! agent_ok; then
+  # 1. No point starting the installer offline; the timer comes back.
+  if ! curl -fsS --max-time 15 -o /dev/null https://hermes-agent.nousresearch.com/install.sh; then
+    log "no network yet; the retry timer runs this again"
+    exit 1
+  fi
 
-# 1. Network up? The installer asks the network for its channel. A plain
-#    outbound-HTTPS probe doubles as the ping gate for the whole bootstrap.
-if ! curl -fsS --max-time 15 -o /dev/null https://hermes-agent.nousresearch.com/install.sh 2>/dev/null; then
-  echo "omamobile-hermes: no network yet; the retry timer will run us again" >&2
-  exit 1
-fi
+  # 2. The official installer (uv, venv and launcher in the user's home).
+  if curl -fsSL --max-time 900 https://hermes-agent.nousresearch.com/install.sh | bash; then
+    log "installer finished"
+  else
+    log "installer failed; trying git + uv"
+  fi
 
-# 2. Primary: the official installer.
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL --max-time 300 https://hermes-agent.nousresearch.com/install.sh | HOME="$HOME" bash
-  curl_rc=${PIPESTATUS[0]:-0}
-else
-  curl_rc=127
-fi
-
-# 3. Fallback (ARM64): git clone + uv sync.
-if [[ $curl_rc -ne 0 || ! -x $hermes ]]; then
-  if command -v git >/dev/null 2>&1 && command -v uv >/dev/null 2>&1; then
-    rm -rf "$HOME/.hermes/hermes-agent"
-    if git clone --depth 1 https://github.com/NousResearch/hermes-agent "$HOME/.hermes/hermes-agent" 2>/dev/null; then
-      if ( cd "$HOME/.hermes/hermes-agent" && uv sync ) 2>/dev/null; then
-        for v in "$HOME/.hermes/hermes-agent/.venv/bin/hermes" "$HOME/.hermes/hermes-agent/bin/hermes"; do
-          if [[ -x $v ]]; then ln -sf "$v" "$hermes"; break; fi
-        done
+  # 3. ARM64 fallback: a git checkout with a uv-made venv, launcher linked.
+  if ! agent_ok && command -v git >/dev/null && command -v uv >/dev/null; then
+    src=$HOME/.hermes/hermes-agent
+    if [[ -d $src/.git ]] || git clone --depth 1 https://github.com/NousResearch/hermes-agent "$src"; then
+      if (cd "$src" && uv sync) && [[ -x $src/.venv/bin/hermes ]]; then
+        mkdir -p "$HOME/.local/bin"
+        ln -sfn "$src/.venv/bin/hermes" "$hermes"
       fi
     fi
   fi
+
+  if ! agent_ok; then
+    log "the agent is not installed yet; the retry timer runs this again"
+    exit 1
+  fi
 fi
 
-# 4. Verify; if it still isn't there, the timer keeps retrying.
-if [[ -x $hermes ]] && "$hermes" --version >/dev/null 2>&1; then
-  "$hermes" update --no-backup --yes >/dev/null 2>&1 || true
-  touch "$marker"
-  exit 0
-fi
+# 4. Update, then the API-only configuration (idempotent sets).
+"$hermes" update --no-backup --yes || log "hermes update failed; keeping the installed version"
+"$hermes" config set model.default glm-5.3 &&
+  "$hermes" config set model.provider zai &&
+  "$hermes" config set model.key_env GLM_API_KEY || { log "config failed"; exit 1; }
+"$hermes" doctor --fix || log "hermes doctor --fix reported problems (run hermes doctor)"
 
-echo "omamobile-hermes: the agent could not be installed (installer rc=$curl_rc)" >&2
-exit 1
+# 5. hermes serve as a user unit; linger (set up at login) keeps it up.
+mkdir -p "$HOME/.config/systemd/user"
+install -Dm644 "$share/hermes.service" "$HOME/.config/systemd/user/hermes.service"
+systemctl --user daemon-reload
+systemctl --user enable --now hermes.service || { log "could not start hermes.service"; exit 1; }
+
+# 6. Done: the retry timer has nothing left to do.
+systemctl --user disable --now hermes-bootstrap.timer || log "could not disable the retry timer"
+mkdir -p "$state" && date -Is > "$state/hermes-installed"
+log "hermes installed, configured and serving"
+exit 0

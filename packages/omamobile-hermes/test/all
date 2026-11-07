@@ -1,53 +1,116 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# omamobile-hermes without the phone: the package parses, the bootstrap
-# scripts pass and the root image installs it (P4 onboarding step).
+# omamobile-hermes without the phone or the network: the package parses, the
+# bootstrap's offline and already-installed paths behave (run against stub
+# curl, hermes and systemctl in a scratch HOME), and the image and the
+# spacewar device descriptor carry the package. Nothing is installed.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+pkg=$here/..
 repo=$(cd -- "$here/../../.." && pwd)
 n=0
 ok() { n=$((n + 1)); echo "ok $n - $1"; }
 fail() { echo "not ok - $1" >&2; exit 1; }
 
-bash -n "$here/../PKGBUILD" || fail "PKGBUILD parses"
-bash -n "$here/../install" || fail "install parses"
-bash -n "$here/../bootstrap.sh" || fail "bootstrap.sh parses"
+bash -n "$pkg/PKGBUILD" || fail "PKGBUILD parses"
+bash -n "$pkg/install" || fail "install parses"
+bash -n "$pkg/bootstrap.sh" || fail "bootstrap.sh parses"
+bash -n "$pkg/test/all" || fail "test parses"
 
 # shellcheck disable=SC1091
-source "$here/../PKGBUILD"
+source "$pkg/PKGBUILD"
 [[ $pkgname == omamobile-hermes ]] || fail "package name"
-[[ $pkgver == "0.1.0" ]] || fail "version (package the root image installs)"
-[[ $install == "install" ]] || fail "install script"
-[[ -f "$here/../version" ]] || fail "version file"
-[[ -f "$here/../LICENSE" ]] || fail "LICENSE"
-
+[[ $pkgver == "$(cat "$pkg/version")" ]] || fail "version file and PKGBUILD agree"
+[[ $install == install ]] || fail "install script"
+[[ -f $pkg/LICENSE ]] || fail "LICENSE"
 for f in bootstrap.sh hermes.service hermes-bootstrap.service hermes-bootstrap.timer; do
-  [[ -f "$here/../$f" ]] || fail "ships $f"
+  [[ -f $pkg/$f ]] || fail "ships $f"
 done
-ok "package files present"
+ok "package files present, version $pkgver"
 
-# The root image must install the bootstrap (the agent itself lives in the
-# user's home, so only the scripts end up in the image).
-if [[ ! -f $repo/rootfs/packages.omamobile ]]; then
-  ok "# skip: the root image's package list is not built here"
-  exit 0
-fi
-list() { sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1" | grep -v '^$'; }
-list "$repo/rootfs/packages.omamobile" | grep -qx omamobile-hermes || fail "not in rootfs/packages.omamobile"
-ok "the root image installs omamobile-hermes"
+# --- the bootstrap, offline: no installer, retry later, no agent -------------
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/omamobile-hermes-test.XXXXXX")
+trap 'rm -rf "$scratch"' EXIT
+stubs=$scratch/bin
+mkdir -p "$stubs" "$scratch/home/.local/bin"
+# curl fails everywhere: no network
+printf '#!/bin/bash\nexit 6\n' > "$stubs/curl"
+chmod +x "$stubs/curl"
+set +e
+out=$(env -i PATH="$stubs:/usr/bin:/bin" HOME="$scratch/home" bash "$pkg/bootstrap.sh" 2>&1)
+rc=$?
+set -e
+[[ $rc == 1 ]] || fail "offline bootstrap exits 1 (retry), got $rc"
+grep -q 'no network yet' <<<"$out" || fail "offline bootstrap says it will retry: $out"
+ok "offline: no installer, exit 1 for the retry timer"
 
-# The setup-user step that runs the bootstrap must pin the API-only model
-# config (no local LLM, no phone gateway).
-if [[ -f $repo/packages/omamobile-shell/bin/omamobile-setup-user ]]; then
-  for c in 'model.default glm-5.3' 'model.provider zai' 'model.key_env GLM_API_KEY'; do
-    grep -q "$c" "$repo/packages/omamobile-shell/bin/omamobile-setup-user" || fail "setup-user lacks: $c"
-  done
-  grep -q 'hermes doctor --fix' "$repo/packages/omamobile-shell/bin/omamobile-setup-user" || fail "setup-user lacks 'hermes doctor --fix'"
+# --- the bootstrap, already installed: update, config, serve, timer off ------
+calls=$scratch/calls
+cat > "$scratch/home/.local/bin/hermes" <<STUB
+#!/bin/bash
+echo "hermes \$*" >> "$calls"
+[[ \${1:-} == --version ]] && echo "hermes 0.0-test"
+exit 0
+STUB
+chmod +x "$scratch/home/.local/bin/hermes"
+cat > "$stubs/systemctl" <<STUB
+#!/bin/bash
+echo "systemctl \$*" >> "$calls"
+exit 0
+STUB
+chmod +x "$stubs/systemctl"
+: > "$calls"
+set +e
+out=$(env -i PATH="$stubs:/usr/bin:/bin" HOME="$scratch/home" bash "$pkg/bootstrap.sh" 2>&1)
+rc=$?
+set -e
+[[ $rc == 0 ]] || fail "installed bootstrap exits 0, got $rc: $out"
+want=(
+  "hermes --version"
+  "hermes update --no-backup --yes"
+  "hermes config set model.default glm-5.3"
+  "hermes config set model.provider zai"
+  "hermes config set model.key_env GLM_API_KEY"
+  "hermes doctor --fix"
+  "systemctl --user daemon-reload"
+  "systemctl --user enable --now hermes.service"
+  "systemctl --user disable --now hermes-bootstrap.timer"
+)
+prev=0
+for w in "${want[@]}"; do
+  line=$(grep -nxF -- "$w" "$calls" | head -1 | cut -d: -f1 || true)
+  [[ -n $line ]] || fail "installed bootstrap runs: $w"
+  (( line > prev )) || fail "installed bootstrap runs in order: $w"
+  prev=$line
+done
+[[ -f $scratch/home/.local/state/omamobile/hermes-installed ]] || fail "install recorded"
+ok "installed: update, API-only config, serve unit, retry timer stops"
+
+# --- the image and the device carry the package, for spacewar only -----------
+if [[ -f $repo/device/spacewar/device.conf ]]; then
+  grep -qE '^ROOTFS_PACKAGES=.*\bomamobile-hermes\b' "$repo/device/spacewar/device.conf" ||
+    fail "device/spacewar/device.conf ROOTFS_PACKAGES has omamobile-hermes"
+  cmp -s "$repo/device/spacewar/device.conf" "$repo/packages/omamobile-device-spacewar/device.conf" ||
+    fail "the spacewar descriptor copies are identical"
+  ok "spacewar's image installs omamobile-hermes (device.conf, both copies)"
 fi
-ok "the setup-user step matches the API-only onboarding"
+if [[ -f $repo/rootfs/packages.omamobile ]]; then
+  if sed -e 's/#.*//' -e 's/[[:space:]]//g' "$repo/rootfs/packages.omamobile" | grep -qx omamobile-hermes; then
+    fail "omamobile-hermes is not in every device's image (rootfs/packages.omamobile): spacewar only"
+  fi
+  ok "not in every device's image"
+fi
+
+# --- the setup-user step: spacewar keeps the CLI, hides only Hermes Desktop --
+su=$repo/packages/omamobile-shell/bin/omamobile-setup-user
+if [[ -f $su ]]; then
+  grep -q 'install.ai.hermes' "$su" || fail "setup-user hides Hermes Desktop"
+  grep -q 'hermes_share=/usr/share/omamobile/hermes' "$su" || fail "setup-user starts the hermes bootstrap"
+  grep -q 'omarchy-done mark omamobile-hermes' "$su" || fail "setup-user marks the hermes step once"
+  ok "setup-user: Hermes Desktop hidden, bootstrap started, once"
+fi
 
 if [[ ${OMAMOBILE_HERMES_SKIP_FETCH:-0} == 1 ]]; then
-  ok "# skip: OMAMOBILE_HERMES_SKIP_FETCH=1 (no network to hermes-agent.nousresearch.com)"
-  exit 0
+  ok "# skip: OMAMOBILE_HERMES_SKIP_FETCH=1"
 fi
 ok "package checks complete"

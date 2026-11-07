@@ -391,59 +391,49 @@ if [[ -f $foot ]] && omarchy-done ensure omamobile-foot-touch; then
   fi
 fi
 
-# Hermes is the one agent in Omarchy's Setup > Default Agent with no aarch64
-# build (hermes-desktop isn't in the aarch64 repository). On spacewar the
-# aarch64 Hermes CLI is the default agent, so its Setup/Install entries must
-# not hide it away; on every other device those entries are hidden instead.
+# Hermes is an agent in Omarchy's Setup > Default Agent, and Install > AI
+# offers Hermes Desktop, which has no aarch64 build (it isn't in the
+# aarch64 repository). Hidden once, through the menu extension file:
+#   every device: Install > AI > Hermes Desktop (install.ai.hermes)
+#   other devices also: Setup > Default Agent > Hermes (setup.default.agent.hermes)
+# spacewar keeps the aarch64 Hermes CLI selectable as its default agent
+# (HERMES-ONBOARDING.md §1), so only the desktop entry goes there.
 if omarchy-done ensure omamobile-menu-agents; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   mkdir -p "$(dirname "$extension")"
   [[ -s $extension ]] || printf '{\n}\n' >"$extension"
-  if ! grep -q '"setup.default.agent.hermes"' "$extension"; then
+  if ! grep -q '"install.ai.hermes"' "$extension"; then
     if is_spacewar; then
-      sed -i '0,/^{/s//{\n  \/\/ spacewar: the aarch64 Hermes CLI is the default agent\n  "setup.default.agent.hermes": {"when": "false"},\n  "install.ai.hermes": {"when": "false"},/' "$extension"
+      sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: no aarch64 build of hermes-desktop\n  "install.ai.hermes": {"when": "false"},/' "$extension"
     else
-      sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: no aarch64 build of hermes-desktop\n  "setup.default.agent.hermes": {"when": "false"},\n  "install.ai.hermes": {"when": "false"},/' "$extension"
+      sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: no aarch64 build of Hermes\n  "setup.default.agent.hermes": {"when": "false"},\n  "install.ai.hermes": {"when": "false"},/' "$extension"
     fi
   fi
 fi
 
-# Hermes onboarding (P4): the omamobile-hermes package installs the agent
-# into the user's home (idempotent; retry timer; runs after firstboot once
-# the network is up). After a successful install we pin the API-only config
-# (no local LLM, no phone gateway) and hand the user a `hermes serve` user
-# unit plus the linger instruction (HERMES-ONBOARDING.md §1/§3).
-if omarchy-done ensure omamobile-hermes; then
-  hermes_sh=/usr/share/omamobile/hermes/bootstrap.sh
-  if [[ -x $hermes_sh ]]; then
-    # The retry timer: install the units and start them at the first login;
-    # a firstboot that never logged in runs the bootstrap once directly.
-    for u in hermes-bootstrap.service hermes-bootstrap.timer; do
-      install -Dm644 "/usr/share/omamobile/hermes/$u" "$HOME/.config/systemd/user/$u"
-    done
-    systemctl --user daemon-reload
-    systemctl --user enable --now hermes-bootstrap.timer 2>/dev/null || true
-    "$hermes_sh"
-
-    if command -v hermes >/dev/null 2>&1 && hermes --version >/dev/null 2>&1; then
-      # API-only, no phone gateway, doctor --fix.
-      hermes config set model.default glm-5.3
-      hermes config set model.provider zai
-      hermes config set model.key_env GLM_API_KEY
-      hermes doctor --fix
-
-      # hermes serve as a user unit; linger keeps it alive after logout
-      # (the phone boots with power, not a login session).
-      install -Dm644 /usr/share/omamobile/hermes/hermes.service "$HOME/.config/systemd/user/hermes.service"
-      systemctl --user daemon-reload
-      systemctl --user enable --now hermes 2>/dev/null || true
-      echo "omamobile-setup-user: hermes is installed, API-only configured and serving. Run 'loginctl enable-linger $USER' once so hermes serve survives logout; 'systemctl --user status hermes' to check."
-    else
-      echo "omamobile-setup-user: hermes not installed yet; the retry timer keeps trying at the next login."
-    fi
+# Hermes agent (P4, HERMES-ONBOARDING.md §1-§5). omamobile-hermes ships the
+# bootstrap and its user units, on spacewar only (device.conf). The bootstrap
+# does the install, the API-only config and the hermes.service unit itself,
+# and stops its own retry timer once the agent works. Here we install the
+# units, start them without waiting (the installer can take minutes and the
+# session must not), and try linger for hermes.service to outlive logout.
+# Marked done once the units are started; the timer covers the rest.
+hermes_share=/usr/share/omamobile/hermes
+if [[ -x $hermes_share/bootstrap.sh ]] && ! omarchy-done check omamobile-hermes; then
+  units=~/.config/systemd/user
+  mkdir -p "$units"
+  for u in hermes-bootstrap.service hermes-bootstrap.timer hermes.service; do
+    install -Dm644 "$hermes_share/$u" "$units/$u"
+  done
+  if systemctl --user daemon-reload &&
+     systemctl --user enable --now hermes-bootstrap.timer &&
+     systemctl --user start --no-block hermes-bootstrap.service; then
+    omarchy-done mark omamobile-hermes
   else
-    echo "omamobile-setup-user: /usr/share/omamobile/hermes/bootstrap.sh missing; the omamobile-hermes package is not in this image" >&2
+    echo "omamobile-setup-user: could not start the hermes bootstrap; trying again at the next login" >&2
   fi
+  loginctl enable-linger "$USER" 2>/dev/null || sudo -n loginctl enable-linger "$USER" 2>/dev/null ||
+    echo "omamobile-setup-user: no linger yet for hermes.service; 'sudo loginctl enable-linger $USER' (HERMES-ONBOARDING.md §2)" >&2
 fi
 
 # System > PIN sets or changes the phone's PIN (omamobile-set-pin), through

@@ -9,7 +9,7 @@ url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
 # User-context install only: the agent binary lands in the user's home at the
 # first login (network needed). The script files below ship in the image.
-depends=()
+depends=(bash curl systemd)
 options=(!strip)
 install=install
 check() {
