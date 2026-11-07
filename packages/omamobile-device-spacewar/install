@@ -16,56 +16,64 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 destination=${1:?Usage: ./install DESTDIR}
 [[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
 
+# Helper: GNU install's -D does not create nested parent dirs on BSD/macOS
+# (/usr/bin/install). Stage files by creating the parent dir first, then
+# installing with -m only.
+inst() {
+  mkdir -p "$(dirname "$2")"
+  install -m 644 "$1" "$2"
+}
+
 # The descriptor, for the tools on the phone (bin/omamobile's copy lives in
 # device/spacewar/device.conf and must stay identical; test/all checks it).
-install -Dm644 device.conf "$destination/usr/share/omamobile/device.conf"
-install -Dm644 etc/omamobile-mirrorlist \
+inst device.conf "$destination/usr/share/omamobile/device.conf"
+inst etc/omamobile-mirrorlist \
   "$destination/etc/pacman.d/omamobile-mirrorlist"
 
 # ALSA UCM: HiFi and the CS-Voice call routing (the capture path through
 # DEC0 is the hard-won part; see the woodyst notes). Depends on
 # alsa-ucm-conf for /lib/card-init.conf and /codecs/wcd938x/init.conf.
-install -Dm644 ucm/Nothing/spacewar/NP1.conf \
+inst ucm/Nothing/spacewar/NP1.conf \
   "$destination/usr/share/alsa/ucm2/Nothing/spacewar/NP1.conf"
-install -Dm644 ucm/Nothing/spacewar/HiFi.conf \
+inst ucm/Nothing/spacewar/HiFi.conf \
   "$destination/usr/share/alsa/ucm2/Nothing/spacewar/HiFi.conf"
-install -Dm644 ucm/Nothing/spacewar/VoiceCall.conf \
+inst ucm/Nothing/spacewar/VoiceCall.conf \
   "$destination/usr/share/alsa/ucm2/Nothing/spacewar/VoiceCall.conf"
 
 # feedbackd: sound for category-less notifications and the white
 # notification LED (the Glyph, through the leds-aw21018 driver). Chosen by
 # the DT compatible; harmless until feedbackd runs.
-install -Dm644 "feedbackd/nothing,spacewar.json" \
+inst "feedbackd/nothing,spacewar.json" \
   "$destination/usr/share/feedbackd/themes/nothing,spacewar.json"
 
 # udev: the vibrator (qcom-spmi-haptics is not in feedbackd's own rules),
 # the accelerometer mount matrix for the ADSP sensors (libssc route), and
 # the UFS clock-scaling mitigation (ufshcd devfreq deadlock signature; see
 # the rule's header for the trace and the hot revert).
-install -Dm644 rules/72-vibration-spacewar.rules \
+inst rules/72-vibration-spacewar.rules \
   "$destination/usr/lib/udev/rules.d/72-vibration-spacewar.rules"
-install -Dm644 rules/81-libssc-nothing-spacewar.rules \
+inst rules/81-libssc-nothing-spacewar.rules \
   "$destination/usr/lib/udev/rules.d/81-libssc-nothing-spacewar.rules"
-install -Dm644 rules/99-ufs-no-clkscale.rules \
+inst rules/99-ufs-no-clkscale.rules \
   "$destination/usr/lib/udev/rules.d/99-ufs-no-clkscale.rules"
 
 # WirePlumber: hand Bluetooth SCO audio to the chip's own bus (the factory
 # path). The full call stack (profile forcing, call-time suspend policy)
 # arrives with the telephony milestone.
-install -Dm644 wireplumber/54-spacewar-bt-sco-offload.conf \
+inst wireplumber/54-spacewar-bt-sco-offload.conf \
   "$destination/usr/share/wireplumber/wireplumber.conf.d/54-spacewar-bt-sco-offload.conf"
 
 # Suspend: deep only. s2idle hangs this phone (console-ramoops evidence in
 # the conf's header); a failed deep suspend then stays awake instead of
 # falling into the hang.
-install -Dm644 sleep/50-spacewar-deep-only.conf \
+inst sleep/50-spacewar-deep-only.conf \
   "$destination/usr/lib/systemd/sleep.conf.d/50-spacewar-deep-only.conf"
 
 # libcamera soft-ISP sensor tuning (the cameras themselves are a later
 # milestone; the tuning is inert until then).
-install -Dm644 libcamera/imx471.yaml "$destination/etc/libcamera/ipa/simple/imx471.yaml"
-install -Dm644 libcamera/imx766.yaml "$destination/etc/libcamera/ipa/simple/imx766.yaml"
-install -Dm644 libcamera/s5kjn1.yaml "$destination/etc/libcamera/ipa/simple/s5kjn1.yaml"
+inst libcamera/imx471.yaml "$destination/etc/libcamera/ipa/simple/imx471.yaml"
+inst libcamera/imx766.yaml "$destination/etc/libcamera/ipa/simple/imx766.yaml"
+inst libcamera/s5kjn1.yaml "$destination/etc/libcamera/ipa/simple/s5kjn1.yaml"
 
-install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-spacewar/LICENSE"
-install -Dm644 version "$destination/usr/share/omamobile/device-spacewar/version"
+inst LICENSE "$destination/usr/share/licenses/omamobile-device-spacewar/LICENSE"
+inst version "$destination/usr/share/omamobile/device-spacewar/version"
