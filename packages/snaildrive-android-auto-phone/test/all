@@ -39,6 +39,32 @@ grep -q '^RuntimeDirectory=snaildrive$' systemd/snaildrive-android-auto-phone.se
   || fail "service uses RuntimeDirectory=snaildrive"
 pass "service runtime directory is /run/snaildrive"
 
+# Die polkit-Regel gibt genau diese eine Unit frei, nur start/stop/restart,
+# nur fuer den aktiven lokalen wheel-Benutzer.
+if command -v node >/dev/null; then
+  node -e '
+    let rule; global.polkit = { Result: { YES: "yes" }, addRule: f => { rule = f; } };
+    eval(require("fs").readFileSync("polkit/50-snaildrive-navi-aa.rules", "utf8"));
+    const S = (local, active, wheel) => ({ local, active, isInGroup: g => wheel && g === "wheel" });
+    const A = (id, unit, verb) => ({ id, lookup: k => ({ unit, verb })[k] });
+    const M = "org.freedesktop.systemd1.manage-units", U = "snaildrive-android-auto-phone.service";
+    const cases = [
+      [A(M, U, "start"), S(1,1,1), "yes"], [A(M, U, "stop"), S(1,1,1), "yes"],
+      [A(M, U, "restart"), S(1,1,1), "yes"], [A(M, U, "enable"), S(1,1,1), undefined],
+      [A(M, "snaildrive-aoa-gadget.service", "start"), S(1,1,1), undefined],
+      [A(M, "sshd.service", "start"), S(1,1,1), undefined],
+      [A(M, U, "start"), S(0,1,1), undefined], [A(M, U, "start"), S(1,0,1), undefined],
+      [A(M, U, "start"), S(1,1,0), undefined],
+      [A("org.freedesktop.login1.reboot", U, "start"), S(1,1,1), undefined]];
+    cases.forEach(([a, s, want], i) => { if (rule(a, s) !== want) { console.error("case " + i); process.exit(1); } });
+  ' || fail "polkit rule grants only the AA unit"
+  pass "polkit rule grants only start/stop/restart of the AA unit"
+else
+  grep -q '"snaildrive-android-auto-phone.service"' polkit/50-snaildrive-navi-aa.rules \
+    || fail "polkit rule names the AA unit"
+  pass "polkit rule names the AA unit (node missing: logic not run)"
+fi
+
 python3 -m unittest discover -s test -t test -q || fail "python tests"
 pass "python tests (core, lab loopback, gadget guard)"
 

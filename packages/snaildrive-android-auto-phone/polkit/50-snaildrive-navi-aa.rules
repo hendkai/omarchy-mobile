@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Car profile: let the active local user in wheel start and stop
+// snaildrive-android-auto-phone.service when the phone goes in or out of the
+// car (carprofile-dispatch runs in the user manager). Nothing else.
+polkit.addRule(function(action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" &&
+      subject.local && subject.active && subject.isInGroup("wheel") &&
+      action.lookup("unit") == "snaildrive-android-auto-phone.service" &&
+      /^(start|stop|restart)$/.test(action.lookup("verb"))) {
+    return polkit.Result.YES;
+  }
+});

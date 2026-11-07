@@ -24,5 +24,8 @@ install -Dm644 systemd/snaildrive-aoa-gadget.service \
 install -Dm644 etc/snaildrive-android-auto-phone/snaildrive-aac-phoneside.conf \
   "$destination/etc/snaildrive-android-auto-phone/snaildrive-aac-phoneside.conf"
 
+install -Dm644 polkit/50-snaildrive-navi-aa.rules \
+  "$destination/usr/share/polkit-1/rules.d/50-snaildrive-navi-aa.rules"
+
 install -Dm644 README.md "$destination/usr/share/doc/snaildrive-android-auto-phone/README.md"
 install -Dm644 version "$destination/usr/share/snaildrive-android-auto-phone/version"
