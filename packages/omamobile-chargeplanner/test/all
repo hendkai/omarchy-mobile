@@ -120,6 +120,25 @@ fi
 grep -q "REGISTER_URL" "$tmp/err" || { echo "not ok - Meldung nennt REGISTER_URL nicht"; exit 1; }
 echo "ok - ohne Register und ohne URL: Abbruch mit Hinweis auf /etc/chargeplanner.conf"
 
+# --refresh-register mit unerreichbarer URL und veraltetem lokalem Register:
+# ist ein Fehler (Exit != 0), damit der monatliche Timer den Grund meldet.
+python3 - "$tmp" <<'PY'
+import os
+import sys
+import time
+from pathlib import Path
+tmp = Path(sys.argv[1])
+reg = tmp / "ladesaeulenregister.csv"
+reg.write_text("SILENTE-DUMMY;keine;Station\n", encoding="utf-8")
+old = time.time() - 40 * 86400
+os.utime(reg, (old, old))
+PY
+UNREACH="file://{tmp}/does-not-exist.csv"
+CHARGEPLANNER_REGISTER_URL="$UNREACH" CHARGEPLANNER_DATA_DIR="$tmp" python3 chargeplanner.py --refresh-register >/dev/null 2>"$tmp/refresh.err" || rc=$?
+test $rc -ne 0 || { echo "not ok - veraltetes Register + unerreichbare URL muss Fehler sein"; exit 1; }
+grep -q "aelter als 25 Tage" "$tmp/refresh.err" || { echo "not ok - Fehlermeldung nennt kein Ablaufdatum"; exit 1; }
+echo "ok - refresh mit veraltetem Register + unerreichbarer URL: Fehler, Exit != 0"
+
 # install stages every file into a scratch root (no host paths touched)
 stage="$tmp/stage"
 ./install "$stage"

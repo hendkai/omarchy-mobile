@@ -1,6 +1,11 @@
 [Unit]
 Description=Ladesaeulenregister (BNetzA) holen, falls aelter als 25 Tage
 Documentation=man:chargeplanner(1)
+# Note: network-online.target wird nicht eingebunden: der monatliche Timer
+# (OnBootSec=10min, OnCalendar=monthly, Persistent=true) ueberdeckt den Fall,
+# dass das Register am ersten Timerlauf veraltet ist (z.B. direkt nach einem
+# Boot). Der Timer versucht dann wiederholt; --refresh-register scheitert nur
+# bei fehlendem Download UND alterem lokalem Register (s. chargeplanner.py).
 
 [Service]
 Type=oneshot

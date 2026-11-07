@@ -243,11 +243,15 @@ def plan(register: Path, center, soc, heading=None, radius_km=CORRIDOR_DEFAULT_K
             "stations_total": len(sts), "stations": scored[:limit]}
 
 
-def ensure_register(register: Path, url: str, max_age_days: float = MAX_AGE_DAYS) -> Path:
+def ensure_register(register: Path, url: str, max_age_days: float = MAX_AGE_DAYS,
+                    fail_on_stale: bool = False) -> Path:
     """Register laden, wenn es fehlt oder aelter als max_age_days ist.
 
     Ohne URL und ohne Datei: Abbruch mit Hinweis. Schlaegt der Download fehl,
-    bleibt eine vorhandene Datei in Gebrauch (mit Warnung).
+    bleibt eine vorhandene Datei in Gebrauch (mit Warnung). Bei
+    --refresh-register (fail_on_stale=True) und einem lokalen Register, das
+    aelter als max_age_days ist, beendet ein fehlgeschlagener Download den Lauf
+    mit einem nicht-null-Code, damit der Timer den Grund meldet.
     """
     if register.exists():
         age_days = (time.time() - register.stat().st_mtime) / 86400
@@ -269,6 +273,11 @@ def ensure_register(register: Path, url: str, max_age_days: float = MAX_AGE_DAYS
     except Exception as exc:  # Netz optional: Verfuegbarkeit ist kein Grund fuer Absturz
         tmp.unlink(missing_ok=True)
         if register.exists():
+            age_days = (time.time() - register.stat().st_mtime) / 86400
+            if fail_on_stale and age_days >= max_age_days:
+                raise SystemExit(
+                    f"chargeplanner: Download fehlgeschlagen ({exc}); lokales "
+                    f"Register ist aelter als {max_age_days} Tage (--refresh-register)")
             print(f"chargeplanner: Download fehlgeschlagen ({exc}), altes Register wird benutzt",
                   file=sys.stderr)
             return register
@@ -296,7 +305,7 @@ def main(argv=None) -> int:
     reg = register_path()
 
     if a.refresh_register:
-        ensure_register(reg, url)
+        ensure_register(reg, url, fail_on_stale=True)
         print(f"chargeplanner: Register {reg}")
         return 0
     if a.lat is None or a.lon is None:

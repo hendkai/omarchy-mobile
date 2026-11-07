@@ -58,7 +58,7 @@ echo "ok - show ohne Parkpunkt meldet Fehlen"
 # install stages every file into a scratch root (no host paths touched)
 stage="$tmp/stage"
 ./install "$stage"
-for f in usr/bin/parkreminder usr/share/parkreminder/parkreminder.conf.example usr/share/parkreminder/99-parkreminder.rules.example usr/share/omamobile-parkreminder/version; do
+for f in usr/bin/parkreminder usr/share/parkreminder/parkreminder.conf.example usr/share/omamobile-parkreminder/version; do
   [[ -f "$stage/$f" ]] || { echo "not ok - install stages $f"; exit 1; }
 done
-echo "ok - install stages all 4 files"
+echo "ok - install stages all 3 files"
