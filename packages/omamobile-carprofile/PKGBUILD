@@ -12,7 +12,7 @@ pkgdesc="Auto-Profil car: AOA-Erkennung (18d1:2d00/2d01), Anstecken/Abstecken, u
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(python)
+depends=(python libnotify)
 checkdepends=(python-pytest)
 source=()
 

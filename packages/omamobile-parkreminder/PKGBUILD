@@ -6,7 +6,7 @@ pkgdesc="Find-my-car for Omarchy Mobile: remembers where the car was parked when
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(python omamobile-fahrtenbuch)
+depends=(python omamobile-fahrtenbuch libnotify)
 
 check() {
   "$startdir/test/all"
