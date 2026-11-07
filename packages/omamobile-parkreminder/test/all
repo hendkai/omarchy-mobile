@@ -1,0 +1,64 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-parkreminder suite: a made-up fahrtenbuch database in a temp dir,
+# nothing from a phone, no GPS.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+export PARKREMINDER_STATE="$tmp/state" PARKREMINDER_CONFIG="$tmp/parkreminder.conf"
+export FAHRTENBUCH_DB="$tmp/db/fahrtenbuch.sqlite"
+
+python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" parkreminder.py
+echo "ok - parkreminder.py parses"
+
+printf '[parkreminder]\nnotify = none\nsource = lasttrip\n' > "$PARKREMINDER_CONFIG"
+
+# Ohne Fahrtenbuch: kein Standort, kein Parkpunkt, Exit 1.
+if python3 parkreminder.py trigger 2>"$tmp/err"; then
+  echo "not ok - ohne Fahrtenbuch darf kein Parkpunkt entstehen"; exit 1
+fi
+[[ ! -e "$PARKREMINDER_STATE/last_park.json" ]] || { echo "not ok - Datei ohne Fix angelegt"; exit 1; }
+echo "ok - ohne Fahrtenbuch: kein Parkpunkt, Exit 1"
+
+# Fahrtenbuch mit einer synthetischen Fahrt (Endpunkt 48.0390 / 9.0000).
+python3 - "$tmp/track.csv" <<'PY'
+import sys
+from datetime import datetime, timedelta
+t0 = datetime(2026, 11, 1, 10, 0, 0)
+with open(sys.argv[1], "w") as f:
+    for i in range(40):
+        f.write(f"{(t0 + timedelta(minutes=i)).isoformat()},{48.0 + i * 0.001:.6f},9.000000\n")
+PY
+# fahrtenbuch.py liegt im Nachbarpaket; hier direkt ueber den Pfad:
+FB=$(cd ../omamobile-fahrtenbuch && pwd)
+python3 "$FB/fahrtenbuch.py" import "$tmp/track.csv" >/dev/null
+
+python3 parkreminder.py trigger >/dev/null
+python3 - "$PARKREMINDER_STATE/last_park.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["source"] == "lasttrip", d
+# Endpunkt der Fahrt (nicht der Startpunkt 48.000): letzter Punkt 48.039
+assert abs(d["lat"] - 48.039) < 1e-6, d
+assert abs(d["lon"] - 9.0) < 1e-6, d
+PY
+echo "ok - Trigger: Parkpunkt = Endpunkt der letzten Fahrt, nicht der Start"
+
+# modemmanager allein: noch kein Fix (P4), Exit 1, alter Parkpunkt bleibt.
+printf '[parkreminder]\nsource = modemmanager\n' > "$PARKREMINDER_CONFIG"
+rm -f "$PARKREMINDER_STATE/last_park.json"
+if python3 parkreminder.py trigger 2>/dev/null; then
+  echo "not ok - modemmanager allein darf (noch) keinen Fix liefern"; exit 1
+fi
+echo "ok - modemmanager allein: kein Fix, Exit 1 (P4)"
+
+if python3 parkreminder.py show >/dev/null 2>&1; then echo "not ok - show ohne Datei"; exit 1; fi
+echo "ok - show ohne Parkpunkt meldet Fehlen"
+
+# install stages every file into a scratch root (no host paths touched)
+stage="$tmp/stage"
+./install "$stage"
+for f in usr/bin/parkreminder usr/share/parkreminder/parkreminder.conf.example usr/share/parkreminder/99-parkreminder.rules.example usr/share/omamobile-parkreminder/version; do
+  [[ -f "$stage/$f" ]] || { echo "not ok - install stages $f"; exit 1; }
+done
+echo "ok - install stages all 4 files"

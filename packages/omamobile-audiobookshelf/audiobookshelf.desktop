@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Audiobookshelf
+Comment=Hoerbuecher (Audiobookshelf-Weboberflaeche)
+Exec=audiobookshelf-open
+Icon=audio-headphones
+Type=Application
+Categories=AudioVideo;Audio;

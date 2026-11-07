@@ -1,0 +1,16 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-chargeplanner into DESTDIR. Activates nothing: the register
+# timer is shipped but not enabled (the install's job, AGENTS.md §1).
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+
+put() { install -d "$(dirname -- "$2")" && install -m "$1" -- "$3" "$2"; }
+put 755 "$d/usr/bin/chargeplanner" chargeplanner.py
+put 644 "$d/etc/chargeplanner.conf" chargeplanner.conf
+put 644 "$d/usr/lib/systemd/system/chargeplanner-register.service" units/chargeplanner-register.service
+put 644 "$d/usr/lib/systemd/system/chargeplanner-register.timer" units/chargeplanner-register.timer
+put 644 "$d/usr/share/omamobile-chargeplanner/version" version

@@ -1,0 +1,10 @@
+[Unit]
+Description=Ladesaeulenregister monatlich aktualisieren (erster Lauf nach dem Start)
+
+[Timer]
+OnBootSec=10min
+OnCalendar=monthly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

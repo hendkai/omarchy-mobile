@@ -1,0 +1,54 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-fahrtenbuch suite: synthetic track only (a made-up straight line
+# of 40 points, one minute apart); the database lives in a temp dir.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+export FAHRTENBUCH_DB="$tmp/db/fahrtenbuch.sqlite"
+
+python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" fahrtenbuch.py
+echo "ok - fahrtenbuch.py parses"
+
+# 40 Punkte, je 1 min, 0.001 Grad Breite (~111 m) -> eine Fahrt von ~4.4 km
+python3 - "$tmp/track.csv" <<'PY'
+import sys
+from datetime import datetime, timedelta
+t0 = datetime(2026, 11, 1, 10, 0, 0)
+with open(sys.argv[1], "w") as f:
+    for i in range(40):
+        f.write(f"{(t0 + timedelta(minutes=i)).isoformat()},{48.0 + i * 0.001:.6f},9.000000\n")
+PY
+
+python3 fahrtenbuch.py import "$tmp/track.csv" | grep -q "1 neue Fahrten" \
+  || { echo "not ok - erster Import: 1 Fahrt erwartet"; exit 1; }
+echo "ok - Import: genau 1 Fahrt aus dem synthetischen Track"
+
+python3 fahrtenbuch.py import "$tmp/track.csv" | grep -q "0 neue Fahrten" \
+  || { echo "not ok - zweiter Import darf nichts doppelt speichern"; exit 1; }
+echo "ok - zweiter Import dedupliziert"
+
+python3 fahrtenbuch.py import "$tmp/track.csv" --gps-source modemmanager 2>"$tmp/err" | grep -q "0 neue Fahrten" \
+  || { echo "not ok - modemmanager-Quelle muss auf den Import zurueckfallen"; exit 1; }
+grep -q "nehme den CSV-Import" "$tmp/err" \
+  || { echo "not ok - Fallback muss warnen"; exit 1; }
+echo "ok - gps-source=modemmanager faellt mit Warnung auf den CSV-Import zurueck"
+
+python3 fahrtenbuch.py export 2026-11 --out "$tmp/Fahrtenbuch_2026-11" | grep -q "1 Fahrten" \
+  || { echo "not ok - Export: 1 Fahrt erwartet"; exit 1; }
+python3 - "$tmp/Fahrtenbuch_2026-11.csv" <<'PY'
+import csv, sys
+rows = list(csv.reader(open(sys.argv[1], encoding="utf-8"), delimiter=";"))
+assert rows[0][6] == "km", rows[0]
+km = float(rows[1][6])
+assert 4.0 < km < 4.8, km
+PY
+echo "ok - Export: CSV mit einer Fahrt, ~4.4 km"
+
+# install stages every file into a scratch root (no host paths touched)
+stage="$tmp/stage"
+./install "$stage"
+for f in usr/bin/fahrtenbuch usr/share/omamobile-fahrtenbuch/version; do
+  [[ -f "$stage/$f" ]] || { echo "not ok - install stages $f"; exit 1; }
+done
+echo "ok - install stages all 2 files"

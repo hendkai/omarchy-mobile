@@ -1,0 +1,18 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-audiobookshelf into DESTDIR. Activates nothing: the sync
+# timer ships disabled, enabling it is the install's call (AGENTS.md §1).
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+
+put() { install -d "$(dirname -- "$2")" && install -m "$1" -- "$3" "$2"; }
+put 755 "$d/usr/bin/abs-sync" abs-sync
+put 755 "$d/usr/bin/audiobookshelf-open" audiobookshelf-open
+put 644 "$d/etc/audiobookshelf-sync.conf" audiobookshelf-sync.conf
+put 644 "$d/usr/share/applications/audiobookshelf.desktop" audiobookshelf.desktop
+put 644 "$d/usr/lib/systemd/system/abs-sync.service" units/abs-sync.service
+put 644 "$d/usr/lib/systemd/system/abs-sync.timer" units/abs-sync.timer
+put 644 "$d/usr/share/omamobile-audiobookshelf/version" version

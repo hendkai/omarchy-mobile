@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-fahrtenbuch
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Mileage log (Fahrtenbuch) for Omarchy Mobile: trips from GPS, SQLite, CSV/HTML export; data stays on the phone"
+arch=(any)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(python)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

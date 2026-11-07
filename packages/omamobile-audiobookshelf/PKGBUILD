@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-audiobookshelf
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Audiobookshelf client and Unraid sync for Omarchy Mobile: web client launcher, rsync of the curated audiobook subset, library rescan"
+arch=(any)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(python openssh rsync curl chromium)
+backup=(etc/audiobookshelf-sync.conf)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

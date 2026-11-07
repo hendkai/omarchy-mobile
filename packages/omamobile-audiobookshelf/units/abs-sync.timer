@@ -1,0 +1,9 @@
+[Unit]
+Description=Hoerbuch-Sync alle 15 Minuten (nur im Heim-WLAN/Tailnet erfolgreich)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target

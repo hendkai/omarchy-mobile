@@ -1,0 +1,13 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Oeffnet die Audiobookshelf-Weboberflaeche (Unraid-Instanz ueber Tailscale)
+# als eigenes Chromium-Fenster. Die offiziellen ABS-Apps (iOS/Android) sind
+# der Hauptweg; auf dem Phone ist die Weboberflaeche der Client.
+set -eu
+CONF=${ABS_SYNC_CONF:-/etc/audiobookshelf-sync.conf}
+url=$(sed -n 's/^ABS_URL=//p' "$CONF" 2>/dev/null | tail -n 1 | sed 's/^"//; s/"$//')
+if [ -z "$url" ]; then
+  echo "audiobookshelf: ABS_URL fehlt in $CONF" >&2
+  exit 2
+fi
+exec chromium --app="$url"

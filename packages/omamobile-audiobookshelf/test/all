@@ -1,0 +1,77 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-audiobookshelf suite: stub ssh, rsync and curl in a temp PATH; no
+# network, no host, no token leaves the temp dir.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin" "$tmp/dest"
+log="$tmp/calls.log"; : > "$log"
+
+# Stubs: loggen, was aufgerufen wurde; ssh-Verhalten per $SSH_OK steuerbar.
+cat > "$tmp/bin/ssh" <<EOF
+#!/bin/sh
+echo "ssh \$*" >> "$log"
+[ "\${SSH_OK:-1}" = 1 ]
+EOF
+cat > "$tmp/bin/rsync" <<EOF
+#!/bin/sh
+echo "rsync \$*" >> "$log"
+exit 0
+EOF
+cat > "$tmp/bin/curl" <<EOF
+#!/bin/sh
+echo "curl \$*" >> "$log"
+exit 0
+EOF
+chmod +x "$tmp/bin/"*
+
+cat > "$tmp/conf" <<EOF
+UNRAID_HOST=sync-host.invalid
+UNRAID_KEY=$tmp/key
+SRC=/srv/auto-sync/
+DEST=$tmp/dest/
+STATE=$tmp/state/last_sync
+BWLIMIT=1000
+MIN_FREE_GB=0
+ABS_URL=http://abs.invalid:13378
+ABS_LIBRARY_ID=lib-test
+EOF
+printf 'ABS_TOKEN=test-token-not-real\n' > "$tmp/env"
+chmod 600 "$tmp/env"
+
+run() { PATH="$tmp/bin:$PATH" ABS_SYNC_CONF="$tmp/conf" ABS_SYNC_ENV="$tmp/env" "$@"; }
+
+# Quelle nicht erreichbar: still beenden, nichts ausfuehren.
+: > "$log"
+SSH_OK=0 run sh abs-sync >/dev/null
+grep -q '^rsync' "$log" && { echo "not ok - ohne Erreichbarkeit kein rsync"; exit 1; }
+echo "ok - Quelle nicht erreichbar: still beendet, kein rsync"
+
+# Erreichbar: rsync von der Quelle, Stand-Datei, Rescan mit Bearer-Token.
+: > "$log"
+SSH_OK=1 run sh abs-sync >/dev/null
+grep -q '^rsync .*sync-host.invalid:/srv/auto-sync/' "$log" \
+  || { echo "not ok - rsync von UNRAID_HOST:SRC erwartet"; cat "$log"; exit 1; }
+grep -q '^curl .*Authorization: Bearer test-token-not-real .*http://abs.invalid:13378/api/libraries/lib-test/scan' "$log" \
+  || { echo "not ok - Rescan an /api/libraries/{id}/scan mit Bearer erwartet"; cat "$log"; exit 1; }
+[[ -s "$tmp/state/last_sync" ]] || { echo "not ok - Stand-Datei fehlt"; exit 1; }
+echo "ok - Sync: rsync von der Quelle, Rescan mit Token, Stand-Datei geschrieben"
+
+# Konfig ohne Host: klarer Fehler, Exit 2.
+printf 'DEST=%s\n' "$tmp/dest/" > "$tmp/conf-bad"
+if PATH="$tmp/bin:$PATH" ABS_SYNC_CONF="$tmp/conf-bad" ABS_SYNC_ENV="$tmp/env" sh abs-sync 2>"$tmp/err" >/dev/null; then
+  echo "not ok - fehlende Konfiguration muss scheitern"; exit 1
+fi
+grep -q "UNRAID_HOST" "$tmp/err" || { echo "not ok - Meldung nennt UNRAID_HOST nicht"; exit 1; }
+echo "ok - fehlende Konfiguration: Abbruch mit Hinweis"
+
+sh -n abs-sync && sh -n audiobookshelf-open && echo "ok - Skripte parsen (sh -n)"
+
+# install stages every file into a scratch root (no host paths touched)
+stage="$tmp/stage"
+./install "$stage"
+for f in usr/bin/abs-sync usr/bin/audiobookshelf-open etc/audiobookshelf-sync.conf usr/share/applications/audiobookshelf.desktop usr/lib/systemd/system/abs-sync.service usr/lib/systemd/system/abs-sync.timer usr/share/omamobile-audiobookshelf/version; do
+  [[ -f "$stage/$f" ]] || { echo "not ok - install stages $f"; exit 1; }
+done
+echo "ok - install stages all 7 files"

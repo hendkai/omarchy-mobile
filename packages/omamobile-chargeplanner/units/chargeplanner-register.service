@@ -1,0 +1,8 @@
+[Unit]
+Description=Ladesaeulenregister (BNetzA) holen, falls aelter als 25 Tage
+Documentation=man:chargeplanner(1)
+
+[Service]
+Type=oneshot
+Environment=CHARGEPLANNER_DATA_DIR=/var/lib/chargeplanner
+ExecStart=/usr/bin/chargeplanner --refresh-register

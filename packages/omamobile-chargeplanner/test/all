@@ -1,0 +1,63 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-chargeplanner suite: no phone, no network, no 50 MB register.
+# A synthetic register (fake stations, made-up coordinates) drives the tests.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+export CHARGEPLANNER_DATA_DIR="$tmp" CHARGEPLANNER_CONFIG="$tmp/none.conf"
+
+python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" chargeplanner.py
+echo "ok - chargeplanner.py parses"
+
+python3 - "$tmp" <<'PY'
+import sys
+out = sys.argv[1]
+cols = ["Ladeeinrichtungs-ID"] + [f"c{i}" for i in range(1, 45)]
+def row(sid, status, lat, lon, kw, conn):
+    r = [""] * 45
+    r[0], r[1], r[2], r[3], r[4], r[5] = sid, "TestBetreiber", "Testsaeule " + sid, status, "Schnellladung", "1"
+    r[6] = str(kw).replace(".", ",")
+    r[11], r[12] = "Teststadt", "12345"
+    r[15], r[16] = str(lat).replace(".", ","), str(lon).replace(".", ",")
+    r[24], r[25] = conn, str(kw).replace(".", ",")
+    return ";".join(r)
+lines = [";".join(cols),
+         row("T-A", "In Betrieb", 48.0005, 9.0005, 300, "CCS"),   # nah, CCS, in Betrieb
+         row("T-B", "Außer Betrieb", 48.0005, 9.0005, 300, "CCS"),  # nicht in Betrieb
+         row("T-C", "In Betrieb", 48.5, 9.5, 150, "CCS")]         # weit weg
+open(f"{out}/ladesaeulenregister.csv", "w", encoding="utf-8").write("\n".join(lines) + "\n")
+PY
+
+# Vorhandene Datei, keine URL: kein Download, kein Fehler.
+python3 chargeplanner.py --refresh-register >/dev/null 2>&1 \
+  || { echo "not ok - refresh mit vorhandener Datei ohne URL"; exit 1; }
+echo "ok - refresh mit vorhandener Datei ohne URL bricht nicht ab"
+
+# Abfrage: nur T-A (in Betrieb, im Radius), als CCS markiert, Zaehler stimmt.
+python3 chargeplanner.py 48.0 9.0 --soc 40 > "$tmp/out.json"
+python3 - "$tmp/out.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["stations_total"] == 2, d                # T-A, T-C (T-B ist außer Betrieb)
+ids = [s["id"] for s in d["stations"]]
+assert ids == ["T-A"], ids
+assert d["stations"][0]["ccs"] is True, d
+PY
+echo "ok - Abfrage: nur die in Betrieb befindliche Nahstation, CCS erkannt"
+
+# Ohne Datei und ohne URL: klare Meldung, Abbruch mit Code != 0.
+rm -f "$tmp/ladesaeulenregister.csv"
+if python3 chargeplanner.py 48.0 9.0 --soc 40 >/dev/null 2>"$tmp/err"; then
+  echo "not ok - ohne Register und ohne URL muss es abbrechen"; exit 1
+fi
+grep -q "REGISTER_URL" "$tmp/err" || { echo "not ok - Meldung nennt REGISTER_URL nicht"; exit 1; }
+echo "ok - ohne Register und ohne URL: Abbruch mit Hinweis auf /etc/chargeplanner.conf"
+
+# install stages every file into a scratch root (no host paths touched)
+stage="$tmp/stage"
+./install "$stage"
+for f in usr/bin/chargeplanner etc/chargeplanner.conf usr/lib/systemd/system/chargeplanner-register.service usr/lib/systemd/system/chargeplanner-register.timer usr/share/omamobile-chargeplanner/version; do
+  [[ -f "$stage/$f" ]] || { echo "not ok - install stages $f"; exit 1; }
+done
+echo "ok - install stages all 5 files"

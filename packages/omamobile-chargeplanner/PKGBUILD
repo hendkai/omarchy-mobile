@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# omamobile-chargeplanner: Paketbau, wie die anderen omamobile-Pakete.
+pkgname=omamobile-chargeplanner
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="EV charge planner for Omarchy Mobile: BNetzA charging-station register (offline after the first download)"
+arch=(any)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(python)
+backup=(etc/chargeplanner.conf)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

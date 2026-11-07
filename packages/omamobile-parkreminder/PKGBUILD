@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-parkreminder
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Find-my-car for Omarchy Mobile: remembers where the car was parked when the phone is unplugged"
+arch=(any)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(python omamobile-fahrtenbuch)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}
