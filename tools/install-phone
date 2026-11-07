@@ -425,7 +425,8 @@ fb() { "$FASTBOOT" -s "$serial" "$@"; }
 vars=$(fb getvar all 2>&1 | sed -E 's/^\(bootloader\) //')
 var() { awk -F: -v k="$1" '$1 == k { sub(/^[^:]*:[ ]*/, ""); print; exit }' <<<"$vars"; }
 product=$(var product)
-[[ $product == "$CODENAME" ]] || die "the phone is '${product:-unknown}', not $CODENAME (${D[NAME]:-}): wrong descriptor or wrong phone"
+# Case-insensitive: the Nothing Phone (1) bootloader reports "Spacewar".
+[[ ${product,,} == "${CODENAME,,}" ]] || die "the phone is '${product:-unknown}', not $CODENAME (${D[NAME]:-}): wrong descriptor or wrong phone"
 [[ $(var unlocked) == yes ]] || die "the bootloader is locked: unlock it first (this erases the phone; see CONTRIBUTING.md)"
 current_slot=$(var current-slot)
 current_bl=$(var version-bootloader)
@@ -522,18 +523,19 @@ while true; do
 done
 ssh_key=$(head -1 "$key_file")
 
-# --- A local copy of the root image, with the owner's first-boot file -------
+# A local copy of the root image, with the owner's first-boot file -------
 # A release install takes kernel updates through omamobile-boot-update's
-# pacman hook (docs/RELEASES.md §5.3) — but it has no qcom-abl-v2 path yet
-# (it refuses the method), so on such a phone the hook must not run: day-2
-# kernel updates come from the laptop, bin/omamobile push, and the first
-# install-phone that ships with a qcom-abl-v2-capable boot-update flips
-# this back to yes.
+# pacman hook (docs/RELEASES.md §5.3) — and that hook now supports
+# BOOT_METHOD=qcom-abl-v2 (P4b t_29f8546d: on-phone Slot-B writer,
+# header-v2 boot.img, dtbo untouched). So on such a phone the hook runs:
+# kernel updates come from the laptop (bin/omamobile push) until the hook
+# is present; the first install-phone that ships with a qcom-abl-v2-capable
+# boot-update flips this back to yes.
 auto_write=yes
 auto_note="lets the hook write slot B's images on kernel updates (AUTO_WRITE=no stops it)"
 if [[ $BOOT_METHOD == qcom-abl-v2 ]]; then
-  auto_write=no
-  auto_note="stops the hook: omamobile-boot-update has no qcom-abl-v2 path yet, so day-2 kernel updates come from the laptop (bin/omamobile push)"
+  auto_write=yes
+  auto_note="omamobile-boot-update supports qcom-abl-v2 now: the hook writes slot B's images on kernel updates"
 fi
 work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
 mkdir -p "$work"
@@ -621,8 +623,8 @@ flash() {
 }
 erase() {
   local part=$1
-  [[ $BOOT_METHOD == qcom-abl-v2 ]] || die "refusing to erase $part: the dtbo erase is qcom-abl-v2's, not $BOOT_METHOD's"
-  [[ $part == dtbo_b ]] || die "refusing to erase $part: only stock's dtbo on slot B is erased"
+  [[ $BOOT_METHOD == qcom-abl-v2 ]] || die "refusing to erase $part: the dtbo/vendor_boot erase is qcom-abl-v2's, not $BOOT_METHOD's"
+  [[ $part == dtbo_b || $part == vendor_boot_b ]] || die "refusing to erase $part: only stock's dtbo_b and vendor_boot_b on slot B are erased"
   [[ " $UFS_RW " == *" $part "* ]] || die "refusing to erase $part: not on the storage-guard allowlist"
   run erase "$part"
 }
@@ -642,10 +644,12 @@ note "Wi-Fi:     ${wifi_ssid:-none}"
 note "SSH key:   ${ssh_key:0:40}... (root and $username)"
 note "root image: $(basename "$rootfs")"
 [[ $BOOT_METHOD == qcom-abl-v2 ]] && note "dtbo_b:    stock's dtbo erased (its overlays target stock's DTB nodes, not ours)"
+[[ $BOOT_METHOD == qcom-abl-v2 ]] && note "vendor_boot_b: vendor boot erased (the ABL refuses a non-empty vendor_boot; spacewar-pmos Pflicht)"
 echo
 echo "These commands, and only these, will run:"
 for p in $BOOT_IMAGES; do echo "    fastboot flash ${p}_b $images/$p.img"; done
 [[ $BOOT_METHOD == qcom-abl-v2 ]] && echo "    fastboot erase dtbo_b"
+[[ $BOOT_METHOD == qcom-abl-v2 ]] && echo "    fastboot erase vendor_boot_b"
 echo "    fastboot flash userdata $userdata_image"
 echo "    fastboot --set-active=b"
 echo "    fastboot reboot"
@@ -660,6 +664,7 @@ answer=$(ask "Type the phone's codename ($CODENAME) to go ahead")
 ((dry)) && say "Dry run: printing the commands instead of running them" || say "Flashing"
 for p in $BOOT_IMAGES; do flash "${p}_b" "$images/$p.img"; done
 [[ $BOOT_METHOD == qcom-abl-v2 ]] && erase dtbo_b
+[[ $BOOT_METHOD == qcom-abl-v2 ]] && erase vendor_boot_b
 flash userdata "$userdata_image"
 run --set-active=b
 run reboot

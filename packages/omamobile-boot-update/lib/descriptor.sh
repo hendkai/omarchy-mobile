@@ -5,10 +5,13 @@
 # sourced, with the same two line forms and the same checks. Sourced by
 # omamobile-boot-update and omamobile-boot-images; the caller defines die.
 #
-# Only BOOT_METHOD=android-v4 (the default) is accepted: the Qualcomm chain,
-# the RAM-only probe and anything else have no slot-B update path here.
-# tests/boot-update-descriptor checks that every descriptor in device/ gets
-# the same verdict from this file as from bin/omamobile.
+# Only BOOT_METHOD=android-v4 (the default) and the Qualcomm chains are
+# accepted: the Pixel's chain loader (qcom-abl), the RAM-only probe and
+# anything else have no slot-B update path here. qcom-abl-v2 packs a single
+# header-v2 boot image with the DTB appended (postmarketOS' format); its
+# Reader is in lib/descriptor.sh. tests/boot-update-parity checks that every
+# descriptor in device/ gets the same verdict from this file as from
+# bin/omamobile.
 
 # Every name a descriptor's UFS_RW may hold (bin/omamobile UFS_RW_ALLOWED,
 # initramfs/init ufs_rw_load).
@@ -33,8 +36,10 @@ bu_load_descriptor() {
       die "$file:$n: not a KEY=value line"
     fi
   done < "$file"
-  [[ $DEV_BOOT_METHOD == android-v4 ]] \
-    || die "$file: BOOT_METHOD=$DEV_BOOT_METHOD has no slot-B update path on the phone (android-v4 only)"
+  case $DEV_BOOT_METHOD in
+    android-v4|qcom-abl-v2) ;;
+    *) die "BOOT_METHOD=$DEV_BOOT_METHOD has no slot-B update path on the phone (android-v4 and qcom-abl-v2 only)" ;;
+  esac
   [[ ${DEV_CODENAME:-} =~ ^[a-z0-9]+$ ]] || die "$file: CODENAME must be a bare codename"
   local rw_chars='^[a-z0-9_ ]+$' seen_rw=" "
   [[ -n ${DEV_UFS_RW:-} ]] || die "$file: UFS_RW is missing"
@@ -47,15 +52,40 @@ bu_load_descriptor() {
     seen_rw+="$p "
   done
   [[ $seen_rw == *" userdata "* ]] || die "$file: UFS_RW must include userdata"
-  for key in CODENAME SOC PACKAGE DTB DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE \
-      VENDOR_PAGESIZE OS_VERSION OS_PATCH_LEVEL BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE COMPATIBLE; do
+  # Common required keys (all methods).
+  for key in CODENAME SOC PACKAGE DTB BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
     p="DEV_$key"
     [[ -n ${!p:-} ]] || die "$file: $key is missing"
   done
-  if [[ -n ${DEV_SOC_IDS:-} && -n ${DEV_SOC_COMPATIBLE:-} ]]; then
-    die "$file: SOC_IDS and SOC_COMPATIBLE are exclusive; name the one this bootloader matches on"
-  elif [[ -z ${DEV_SOC_IDS:-} && -z ${DEV_SOC_COMPATIBLE:-} ]]; then
-    die "$file: SOC_IDS is missing (or SOC_COMPATIBLE, for a bootloader that matches /soc_compatible)"
+  # Method-specific fields. qcom-abl-v2 takes a single header-v2 boot image
+  # with the DTB appended; no DTBO/VENDOR_* fields (that is the android-v4
+  # layout) and no SOC_IDS/SOC_COMPATIBLE.
+  if [[ $DEV_BOOT_METHOD == qcom-abl-v2 ]]; then
+    local hex='^(0x)?[0-9a-fA-F]+$' key p
+    [[ ${DEV_BOOT_PAGESIZE:-} =~ ^(512|1024|2048|4096)$ ]] \
+      || die "$file: BOOT_PAGESIZE must be 512, 1024, 2048 or 4096, not '${DEV_BOOT_PAGESIZE:-missing}'"
+    for key in BOOT_BASE BOOT_KERNEL_OFFSET BOOT_RAMDISK_OFFSET BOOT_DTB_OFFSET BOOT_TAGS_OFFSET; do
+      p="DEV_$key"
+      [[ ${!p:-} =~ $hex ]] || die "$file: $key must be a hex address like 0x8000, not '${!p:-missing}'"
+    done
+    [[ ${DEV_BOOT_APPEND_DTB:-1} == 1 ]] \
+      || die "$file: BOOT_APPEND_DTB must be 1 (the only layout this packer writes)"
+    [[ " $DEV_UFS_RW " == *" dtbo_b "* ]] \
+      || die "$file: qcom-abl-v2 erases stock's dtbo_b at install; dtbo_b must be on UFS_RW"
+  else
+    for key in DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE \
+        VENDOR_PAGESIZE OS_VERSION OS_PATCH_LEVEL; do
+      p="DEV_$key"
+      [[ -n ${!p:-} ]] || die "$file: $key is missing"
+    done
+    if [[ -n ${DEV_SOC_IDS:-} && -n ${DEV_SOC_COMPATIBLE:-} ]]; then
+      die "$file: SOC_IDS and SOC_COMPATIBLE are exclusive; name the one this bootloader matches on"
+    elif [[ -z ${DEV_SOC_IDS:-} && -z ${DEV_SOC_COMPATIBLE:-} ]]; then
+      die "$file: SOC_IDS is missing (or SOC_COMPATIBLE, for a bootloader that matches /soc_compatible)"
+    fi
+    [[ ${DEV_VENDOR_PAGESIZE:-} =~ ^0x[0-9a-fA-F]+$|^[0-9]+$ ]] || die "$file: VENDOR_PAGESIZE must be a number"
+    [[ ${DEV_OS_VERSION:-} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$file: OS_VERSION must be A.B.C"
+    [[ ${DEV_OS_PATCH_LEVEL:-} =~ ^[0-9]{4}-[0-9]{2}$ ]] || die "$file: OS_PATCH_LEVEL must be YYYY-MM"
   fi
   local sc='^[a-z0-9]+(-[a-z0-9]+)*:0x[0-9a-f]+:[0-9]+:[0-9]+:[0-9]+$' labels=" "
   for p in ${DEV_SOC_COMPATIBLE:-}; do
@@ -69,9 +99,6 @@ bu_load_descriptor() {
     [[ $p =~ ^[a-z0-9]+:0x[0-9a-f]+$ ]] || die "$file: SOC_IDS entries are label:0xsoc_id, not $p"
   done
   [[ $DEV_DTB =~ ^[a-z0-9_/.-]+\.dtb$ && $DEV_DTB != *..* ]] || die "$file: DTB must be a relative .dtb path"
-  [[ $DEV_VENDOR_PAGESIZE =~ ^0x[0-9a-fA-F]+$|^[0-9]+$ ]] || die "$file: VENDOR_PAGESIZE must be a number"
-  [[ $DEV_OS_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$file: OS_VERSION must be A.B.C"
-  [[ $DEV_OS_PATCH_LEVEL =~ ^[0-9]{4}-[0-9]{2}$ ]] || die "$file: OS_PATCH_LEVEL must be YYYY-MM"
   for p in ${DEV_DTB_OVERLAYS:-}; do
     [[ $p =~ ^[a-z0-9-]+$ ]] || die "$file: DTB_OVERLAYS: bad overlay name '$p'"
   done
@@ -87,9 +114,6 @@ bu_load_descriptor() {
       || die "$file: BOOT_IMAGES may hold only boot, init_boot, vendor_boot, vendor_kernel_boot and dtbo, not $p"
     [[ $seen != *" $p "* ]] || die "$file: BOOT_IMAGES names $p twice"
     seen+="$p "
-  done
-  for p in boot vendor_boot dtbo; do
-    [[ $seen == *" $p "* ]] || die "$file: BOOT_IMAGES must include $p"
   done
   local avb=" "
   for p in ${DEV_AVB_FOOTERS:-}; do

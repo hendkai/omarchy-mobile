@@ -209,7 +209,40 @@ if [[ -n $keys && -s $keys ]] || [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
   rm -rf "$extra" "$img/extra.cpio"
 fi
 
-say "Boot images (header v4): $DEV_BOOT_IMAGES"
+say "Boot images: $DEV_BOOT_IMAGES"
+if [[ $DEV_BOOT_METHOD == qcom-abl-v2 ]]; then
+  # qcom-abl-v2: a single header-v2 boot image with the board DTB appended
+  # to the compressed kernel (postmarketOS format on the Nothing Phone (1)).
+  # Only BOOT_IMAGES is boot; dtbo_b is erased by install-phone and flash and
+  # stays empty, so no DTB/img and no dtbo rewrite.
+  command -v gzip >/dev/null 2>&1 || die "missing tool gzip"
+  [[ -s $kernel ]] || die "no kernel Image at $kernel"
+  [[ -s $dtb ]] || die "no DTB at $dtb"
+  _osm_dir="${OMAMOBILE_BOOT_OSM0SIS:-/usr/lib/omamobile-boot-update/osm0sis}"
+  _osm="$_osm_dir/bin/mkbootimg"
+  [[ -x $_osm ]] || die "qcom-abl-v2 needs the pinned mkbootimg-osm0sis at $_osm (set OSM0SIS_DIR or package the pinned toolchain with the boot-update package)"
+  "$LZ4" -l -9 -q "$kernel" "$img/$DEV_CODENAME-kernel.lz4"
+  gzip -f -c "$img/$DEV_CODENAME-kernel.lz4" > "$img/$DEV_CODENAME-kernel.gz"
+  rm -f "$img/$DEV_CODENAME-kernel.lz4"
+  cat "$img/$DEV_CODENAME-kernel.gz" "$dtb" > "$img/$DEV_CODENAME-kernel-dtb"
+  say "Boot image (qcom-abl-v2, header 2): boot.img with DTB appended"
+  "$_osm" \
+    --kernel "$img/$DEV_CODENAME-kernel-dtb" \
+    --ramdisk "$ramdisk" \
+    --cmdline "${DEV_CMDLINE:-}" \
+    --base "$DEV_BOOT_BASE" \
+    --kernel_offset "$DEV_BOOT_KERNEL_OFFSET" \
+    --ramdisk_offset "$DEV_BOOT_RAMDISK_OFFSET" \
+    --tags_offset "$DEV_BOOT_TAGS_OFFSET" \
+    --dtb_offset "$DEV_BOOT_DTB_OFFSET" \
+    --pagesize "$DEV_BOOT_PAGESIZE" \
+    --header_version 2 \
+    --output "$img/boot.img" || die "osm0sis mkbootimg failed"
+  rm -f "$img/$DEV_CODENAME-kernel.gz" "$img/$DEV_CODENAME-kernel-dtb"
+  printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
+  say "boot.img written (header v2 with DTB appended)"
+  exit 0
+fi
 : | "$CPIO" -o -H newc --quiet > "$img/empty.cpio"
 cmdline="$DEV_VENDOR_CMDLINE"
 if bu_has_image init_boot; then

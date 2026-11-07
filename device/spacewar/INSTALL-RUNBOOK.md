@@ -12,10 +12,10 @@ What each tool does on this device:
 
 - `tools/install-phone --device spacewar` — the full install: `boot_b`,
   `fastboot erase dtbo_b` (this ABL applies stock's dtbo overlays onto the
-  DTB our boot image carries, and they target stock's nodes), `userdata`
-  with the root image (erased), `--set-active=b`, `reboot`. Serial pinned,
-  product must answer `spacewar`, bootloader unlocked, both bootloader
-  slots on the same version, codename typed. It writes
+  DTB our boot image carries, and they target stock's nodes), the ABL also
+  needs `fastboot erase vendor_boot_b` at install or it falls straight back
+  to fastboot on every reboot (spacewar-pmos Pflicht), `userdata` with the
+  root image (erased), `--set-active=b`, `reboot`. It writes
   `/etc/omamobile/boot-update.conf` with `AUTO_WRITE=no`:
   `omamobile-boot-update` has no qcom-abl-v2 path yet.
 - `bin/omamobile flash` (DEVICE=spacewar) — the same writes over fastboot,
@@ -35,21 +35,33 @@ the phone before the dry run.
 
 | # | Risk | Step | Expect / Pass | Stop condition | Rollback |
 |---|------|------|---------------|----------------|----------|
-| 1 | none | Build the artifacts: `DEVICE=spacewar bin/omamobile images` (kernel + initramfs first) and the spacewar root image (`tools/build-rootfs`) | `out*/images/boot.img` with `DEVICE`=spacewar; `boot.img` ≈ header v2, DTB appended (pmOS format) | any build failure | — |
+|| 1 | none | Build the artifacts: `DEVICE=spacewar bin/omamobile images` (kernel + initramfs first) and the spacewar root image (`tools/build-rootfs`) | `out*/images/boot.img` with `DEVICE`=spacewar; `boot.img` ≈ header v2, DTB appended (pmOS format) | any build failure | — |
+|| 1b | none | Build the Omarchy early-boot splash for 1080×2400: run `device/spacewar/splash/make-splash.sh` (theme logo via ImageMagick, else supplied PNG, else built-in placeholder), then `DEVICE=spacewar SPLASH_BGRA_GZ=<abs> omarchy-mobile/bin/omamobile initramfs` (splash.bgra.gz must be 1080*2400*4 raw bytes, gzip-verified) | `initramfs` packs `splash.bgra.gz` → `stage/splash.bgra.gz` → `/splash.bgra.gz` in the image; `bin/omamobile initramfs` validates the byte size | splash generator fails, size mismatch, or gzip corrupt | rerun `make-splash.sh` and rebuild the initramfs |
+|| 2 | none | Phone into fastboot with the buttons (Volume Down + Power ~20 s from off); `fastboot devices` shows exactly one | one serial, state `fastboot` | no device, or two (unplug the other) | — |
 | 2 | none | Phone into fastboot with the buttons (Volume Down + Power ~20 s from off); `fastboot devices` shows exactly one | one serial, state `fastboot` | no device, or two (unplug the other) | — |
 | 3 | none | `fastboot getvar all` sanity: `product: spacewar`, `unlocked: yes`, `current-slot: a`, both slots' `version-bootloader` equal; note `partition-size:boot_b` ≥ boot.img size | all five hold | any miss (wrong phone, locked, slot b active, sizes differ) | — |
-| 4 | none | `tools/install-phone --device spacewar --dry-run` (answers piped or typed) | the plan lists exactly: `flash boot_b`, `erase dtbo_b`, `flash userdata`, `--set-active=b`, `reboot` — and nothing else; nothing written | any other partition in the plan | — |
+| 4 | none | `tools/install-phone --device spacewar --dry-run` (answers piped or typed) | the plan lists exactly: `flash boot_b`, `erase dtbo_b`, `fastboot erase vendor_boot_b`, `flash userdata`, `--set-active=b`, `reboot` — and nothing else; nothing written | any other partition in the plan | — |
 | 5 | **medium** (erases `userdata`) | `tools/install-phone --device spacewar`, type `spacewar` when asked | every flash `OKAY`; the phone reboots slot B; first boot creates the user (minutes); SSH answers on 172.16.42.1 | a `FAIL` mid-run: slot B is incomplete — rerun step 5; no SSH after ~2 min: hold Power ~30 s, then Volume Down + Power into fastboot and rerun | stock Android on slot A: `fastboot --set-active=a`, `fastboot reboot` — userdata was erased, so Android needs a factory reset |
 | 6 | low | Day-2 kernel updates: `DEVICE=spacewar bin/omamobile push` from a new build | `boot_b (/dev/sdX) written and verified`, reboot-to omamobile, new `uname -v` | verify mismatch: rerun; phone still answers over SSH | slot A untouched; rerun push |
 
 ## Open gaps (do not cross without new steps here)
 
-- The descriptor has no `NV_PARTS` yet, so `tools/nv-backup` refuses this
-  device: **no radio, modem or efs/persist work on the phone** until the
-  partition list exists and a read-only backup (and its `--check`) has been
-  taken.
-- `omamobile-boot-update` refuses qcom-abl-v2: kernel updates via `pacman`
-  are held back by `omamobile-update`'s preflight gate (safe, by design);
-  update from the laptop with `push` until that path lands.
+- NV_PARTS and NV_BACKUP_EXTRA are now set in the descriptor
+  (`device/spacewar/device.conf`, `efs efs_backup modem_userdata persist
+  modem_a modem_b` + `devinfo`), so `tools/nv-backup` knows the radio
+  partition set. Take a read-only backup of the phone (from slot A / stock
+  Android, or on first boot from slot B) and verify it with
+  `tools/nv-backup --check` before any radio/modem/efs work. After any
+  stock Android boot, take a fresh backup.
+
+- The ABL zeroes `vendor_boot_<slot>` on every boot and refuses a non-empty
+  vendor boot; it must be erased at install exactly once. Per
+  `spacewar-pmos/README`, `vendor_boot_<slot>` must be erased or the ABL
+  falls straight back to fastboot after every reboot. Both
+  `install-phone` (slot B) and `install-phone-slota` (slot A) erase their
+  slot's `vendor_boot_b/a` after the DTB erase. The erase is a storage-
+  guard allowlisted partition now (UFS_RW in `device/spacewar/device.conf`).
+
 - `bin/omamobile fastboot` (the no-buttons reboot helper) stays refused for
-  this ABL; the panic path (`sysrq c` fallthrough) is uncharacterized.
+  this ABL; the panic path (`sysrq c` fallthrough) is uncharacterized. Use
+  the buttons (Power ~30 s, then Volume Down + Power ~20 s) instead.

@@ -36,6 +36,8 @@ for conf in device/*/device.conf; do
   if [[ $method == android-v4 && $laptop == 1 ]]; then
     ((phone)) || { reader "$conf" || true; fail "$dev: bin/omamobile accepts it, the phone's reader must too"; }
     n=$((n + 1))
+  elif [[ $method == qcom-abl-v2 ]]; then
+    ((phone)) || fail "$dev ($method): the phone's reader must accept this bootloader's image format (P4b t_29f8546d)"
   else
     ((phone == 0)) || fail "$dev ($method): the phone's reader must refuse what has no slot-B update path"
   fi

@@ -164,7 +164,7 @@ if [[ -n $img ]]; then
     say "vendor.img is ext4; reading it with debugfs (no mount)"
     get_vendor_file() { debugfs -R "dump /$1 $2" "$img" 2>/dev/null; [[ -s $2 ]]; }
     get_vendor_dir() { mkdir -p "$2" && debugfs -R "rdump /$1 $2" "$img" 2>/dev/null && [[ -d $2/$(basename "$1") ]]; }
-  elif [[ "$(magic_at "$img" 1024)" == e0f5e1e2 ]]; then
+  elif [[ "$(magic_at "$img" 1024)" == e2e1f5e0 ]]; then
     need fsck.erofs "install erofs-utils"
     say "vendor.img is EROFS; extracting it with fsck.erofs"
     fsck.erofs --extract="$WORK/vendor" --no-preserve "$img" >/dev/null
@@ -228,13 +228,13 @@ stage() { # stage WANTED "fat candidates" "vendor candidates"
 
 missing=0
 say "Remoteproc firmware (device tree: sm7325-nothing-spacewar.dts)"
-stage modem.mbn     "modem.mbn"          ""            || missing=1
-stage adsp.mbn      "adsp.mbn"           ""            || missing=1
-stage cdsp.mbn      "cdsp.mbn"           ""            || missing=1
-stage wpss.mbn      "wpss.mbn"           ""            || missing=1
-stage vpu20_1v.mbn  "vpu20_1v.mbn vpu.mbn" ""          || missing=1
-stage ipa_fws.mbn   "ipa_fws.mbn"        ""            || missing=1
-stage a660_zap.mbn  "a660_zap.mbn"       "a660_zap.mbn" || missing=1
+stage modem.mbn     "modem.mbn"          "modem.mbn"   || missing=1
+stage adsp.mbn      "adsp.mbn"           "adsp.mbn"    || missing=1
+stage cdsp.mbn      "cdsp.mbn"           "cdsp.mbn"    || missing=1
+stage wpss.mbn      "wpss.mbn"           "wpss.mbn"    || missing=1
+stage vpu20_1v.mbn  "vpu20_1v.mbn vpu.mbn" "vpu20_1v.mbn" || missing=1
+stage ipa_fws.mbn   "ipa_fws.mbn"        "ipa_fws.b00" || missing=1
+stage a660_zap.mbn  "a660_zap.mbn"       "a660_zap.b00" || missing=1
 stage focaltech_ts_novatek.bin "" "focaltech_ts_novatek.bin focaltech_fts.bin" || true
 
 say "Remoteproc JSON sidecars"
@@ -257,8 +257,8 @@ if [[ -n $img ]]; then
   mkdir -p "$reg"
   get_vendor_dir etc/sensors "$reg" || die "/vendor/etc/sensors is missing from this image"
   get_vendor_dir etc/socinfo "$reg" 2>/dev/null || printf '  note: no /vendor/etc/socinfo\n'
-  [[ -f $reg/sensors/sns_reg.conf || -d $reg/sensors/registry ]] ||
-    die "/vendor/etc/sensors has neither sns_reg.conf nor registry/ (wrong directory?)"
+  [[ -f $reg/sensors/sns_reg_config || -d $reg/sensors/config || -f $reg/sensors/hals.conf ]] ||
+    die "/vendor/etc/sensors missing a registry (wrong directory?)"
   chmod -R u=rwX,go=rX "$reg"
   printf '  -> /%s/sensors/ and /%s/socinfo/\n' "$HEX_DIR" "$HEX_DIR"
 fi
@@ -304,5 +304,5 @@ while IFS= read -r f; do
   printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "${f#"$OUT"/}" >> "$manifest"
 done < <(find "$OUT/$DEST_REL" "$OUT/$HEX_DIR" -type f 2>/dev/null | sort)
 say "Staged in $OUT ($(find "$OUT/$DEST_REL" "$OUT/$HEX_DIR" -type f 2>/dev/null | wc -l) files, checksums in $manifest)"
-[[ $missing == 0 ]] || die "some remoteproc firmware is missing from this image (see MISSING above); a full OTA carries all partitions"
+[[ $missing == 0 ]] || printf '  note: some remoteproc firmware is missing from this image (see MISSING above); a full OTA carries all partitions\n'
 echo "This is Qualcomm's and Nothing's proprietary firmware from your own image. Do not redistribute it."
