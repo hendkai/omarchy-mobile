@@ -11,12 +11,15 @@ $FAHRTENBUCH_DB bzw. ~/.local/share/fahrtenbuch/. Nichts davon gehoert ins Repo.
 
 GPS-Quelle (--gps-source):
   track         CSV-Import (iso-zeit,lat,lon je Zeile). Standard, offline.
-  modemmanager  ModemManager-Location / omamobile-gnss. Die Anbindung haengt am
-                Modem-Bring-up (P4). Bis dahin faellt sie mit Warnung auf den
-                CSV-Import zurueck.
+  modemmanager  ModemManager-Location (mmcli, Modul modemlocation.py). GNSS wird
+                nur fuer ein Modem eingeschaltet, das fertig hochgefahren ist,
+                und danach wieder ausgeschaltet. --window SEKUNDEN sammelt
+                Fixes nach dem ersten Fix. Ohne Modem oder ohne Fix: Warnung
+                und Fallback auf den CSV-Import.
 
 Nutzung:
   fahrtenbuch import track.csv
+  fahrtenbuch import --gps-source modemmanager --window 600
   fahrtenbuch export 2026-11 [--out Fahrtenbuch_2026-11]
 """
 from __future__ import annotations
@@ -30,6 +33,13 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# modemlocation.py liegt installiert in /usr/lib/omamobile-fahrtenbuch/, im
+# Entwicklungsbaum neben dieser Datei.
+for _libdir in (Path("/usr/lib/omamobile-fahrtenbuch"), Path(__file__).resolve().parent):
+    if (_libdir / "modemlocation.py").exists() and str(_libdir) not in sys.path:
+        sys.path.append(str(_libdir))
+from modemlocation import GpsUnavailable, collect_fixes  # noqa: E402
 
 GAP = timedelta(minutes=5)          # Standtpause ab der eine neue Fahrt beginnt
 MAX_SPEED = 150.0 / 3.6             # km/h -> m/s; grober GPS-Ausreisser-Schnitt
@@ -56,10 +66,6 @@ def haversine(a: P, b: P) -> float:
     return 6371.0 * 2 * math.asin(math.sqrt(h))
 
 
-class GpsUnavailable(Exception):
-    """Keine GPS-Quelle liefert Punkte (Modem nicht oben, kein D-Bus, ...)."""
-
-
 def read_track(src: Path) -> list[P]:
     pts = []
     with open(src, encoding="utf-8-sig") as f:
@@ -76,17 +82,18 @@ def read_track(src: Path) -> list[P]:
     return pts
 
 
-def modemmanager_points() -> list[P]:
-    """ModemManager-Location. Noch nicht verdrahtet (Modem-Bring-up P4)."""
-    raise GpsUnavailable("ModemManager-Location ist noch nicht angebunden (P4)")
+def modemmanager_points(window_s: float = 0) -> list[P]:
+    """Fixes vom Modem (mmcli). Wirft GpsUnavailable, wenn kein Modem oben ist
+    oder kein Fix kommt; GNSS ist danach wieder aus."""
+    return [P(f.ts, f.lat, f.lon) for f in collect_fixes(window_s=window_s, timeout_s=60)]
 
 
-def read_points(source: str, path: Path) -> list[P]:
+def read_points(source: str, path: Path, window_s: float = 0) -> list[P]:
     if source == "track":
         return read_track(path)
     if source == "modemmanager":
         try:
-            return modemmanager_points()
+            return modemmanager_points(window_s)
         except GpsUnavailable as exc:
             print(f"fahrtenbuch: gps-source=modemmanager nicht verfuegbar ({exc}); "
                   f"nehme den CSV-Import", file=sys.stderr)
@@ -161,6 +168,8 @@ def main(argv=None) -> int:
     imp = sub.add_parser("import", help="Trips aus einer GPS-Quelle speichern")
     imp.add_argument("path", type=Path, help="CSV-Track (iso,lat,lon je Zeile)")
     imp.add_argument("--gps-source", choices=["track", "modemmanager"], default="track")
+    imp.add_argument("--window", type=float, default=0, metavar="SEKUNDEN",
+                     help="modemmanager: so lange nach dem ersten Fix Fixes sammeln (0: nur der erste)")
     exp = sub.add_parser("export", help="Monat exportieren (CSV + HTML)")
     exp.add_argument("month", help="YYYY-MM")
     exp.add_argument("--out", type=Path, default=None)
@@ -171,7 +180,7 @@ def main(argv=None) -> int:
     db = sqlite3.connect(db_file)
     init_db(db)
     if a.cmd == "import":
-        trips = split_trips(read_points(a.gps_source, a.path))
+        trips = split_trips(read_points(a.gps_source, a.path, a.window))
         n = save_trips(db, trips)
         print(f"{n} neue Fahrten gespeichert ({len(trips)} erkannt)")
     else:

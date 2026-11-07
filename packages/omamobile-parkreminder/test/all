@@ -7,6 +7,8 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 export PARKREMINDER_STATE="$tmp/state" PARKREMINDER_CONFIG="$tmp/parkreminder.conf"
 export FAHRTENBUCH_DB="$tmp/db/fahrtenbuch.sqlite"
+# Keine Hardware: ohne mmcli liefert die modemmanager-Quelle keinen Fix.
+export OMAMOBILE_MMCLI=/nonexistent-mmcli
 
 python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" parkreminder.py
 echo "ok - parkreminder.py parses"
@@ -44,13 +46,16 @@ assert abs(d["lon"] - 9.0) < 1e-6, d
 PY
 echo "ok - Trigger: Parkpunkt = Endpunkt der letzten Fahrt, nicht der Start"
 
-# modemmanager allein: noch kein Fix (P4), Exit 1, alter Parkpunkt bleibt.
+# modemmanager allein: kein mmcli, also kein Fix; Exit 1, alter Parkpunkt bleibt.
 printf '[parkreminder]\nsource = modemmanager\n' > "$PARKREMINDER_CONFIG"
 rm -f "$PARKREMINDER_STATE/last_park.json"
 if python3 parkreminder.py trigger 2>/dev/null; then
-  echo "not ok - modemmanager allein darf (noch) keinen Fix liefern"; exit 1
+  echo "not ok - modemmanager allein darf ohne Modem keinen Fix liefern"; exit 1
 fi
-echo "ok - modemmanager allein: kein Fix, Exit 1 (P4)"
+echo "ok - modemmanager allein: kein Fix ohne Modem, Exit 1"
+
+python3 -m unittest -q test_position || { echo "not ok - parkreminder Positions-Tests"; exit 1; }
+echo "ok - Positions-Tests: Modem-Fix, Fallback auf lasttrip"
 
 if python3 parkreminder.py show >/dev/null 2>&1; then echo "not ok - show ohne Datei"; exit 1; fi
 echo "ok - show ohne Parkpunkt meldet Fehlen"

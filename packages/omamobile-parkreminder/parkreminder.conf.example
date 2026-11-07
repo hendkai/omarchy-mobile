@@ -2,7 +2,9 @@
 # parkreminder.conf: Vorlage fuer ~/.config/parkreminder.conf (pro Benutzer).
 # notify = none | signal   (signal: Hermes-One-shot; standardmaessig aus)
 # source = Quellen in Reihenfolge, getrennt durch ':'
-#          lasttrip (Fahrtenbuch-Endpunkt) | modemmanager (noch ohne Fix, P4)
+# lasttrip (Fahrtenbuch-Endpunkt) | modemmanager (GNSS ueber ModemManager; nur
+#          wenn das Modem fertig hochgefahren ist; sonst kein Fix, naechste Quelle)
+# Empfohlen nach dem Bring-up auf dem Geraet: source = modemmanager:lasttrip
 [parkreminder]
 notify = none
 source = lasttrip

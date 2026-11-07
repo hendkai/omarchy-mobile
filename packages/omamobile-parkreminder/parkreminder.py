@@ -7,8 +7,11 @@ Umsetzung von car-apps/parkreminder/DESIGN.md:
   1. Position holen: Quellen in config-Reihenfolge (source=...)
        lasttrip      Endpunkt der letzten Fahrt aus dem Fahrtenbuch (heute der
                      einzige Weg ohne Modem; das Fahrtenbuch laeuft mit)
-       modemmanager  ModemManager-Location. Noch nicht angebunden (P4): liefert
-                     bis dahin keinen Fix.
+       modemmanager  ModemManager-Location (mmcli, modemlocation.py aus dem
+                     Paket omamobile-fahrtenbuch). GNSS wird nur fuer ein fertig
+                     hochgefahrenes Modem eingeschaltet, wartet hoechstens 30 s
+                     auf einen Fix und schaltet danach wieder ab. Ohne Modem
+                     oder Fix: kein Standort, die naechste Quelle greift.
   2. Parkpunkt nach $PARKREMINDER_STATE/last_park.json (Standard:
      ~/.local/state/parkreminder/)
   3. Optional notify=signal: Hermes-One-shot (ist standardmaessig aus)
@@ -27,7 +30,16 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# modemlocation.py: installiert mit omamobile-fahrtenbuch (/usr/lib/omamobile-fahrtenbuch/),
+# im Entwicklungsbaum im Nachbarpaket.
+for _libdir in (Path("/usr/lib/omamobile-fahrtenbuch"),
+                Path(__file__).resolve().parent.parent / "omamobile-fahrtenbuch"):
+    if (_libdir / "modemlocation.py").exists() and str(_libdir) not in sys.path:
+        sys.path.append(str(_libdir))
+from modemlocation import GpsUnavailable, collect_fixes  # noqa: E402
+
 STATE_FILE = "last_park.json"
+PARK_FIX_TIMEOUT_S = 30   # udev-Trigger beim Abstecken: laenger warten bringt nichts
 
 
 def config_path() -> Path:
@@ -82,8 +94,17 @@ def position_lasttrip(db: Path) -> dict | None:
 
 
 def position_modemmanager() -> dict | None:
-    """ModemManager-Location. Noch nicht angebunden (P4): kein Fix."""
-    return None
+    """ModemManager-Location: ein Fix, hoechstens 30 s Wartezeit. Ohne Modem oder
+    Fix: None, die naechste Quelle greift."""
+    try:
+        fixes = collect_fixes(window_s=0, timeout_s=PARK_FIX_TIMEOUT_S)
+    except GpsUnavailable as exc:
+        print(f"parkreminder: ModemManager ohne Fix ({exc})", file=sys.stderr)
+        return None
+    fix = fixes[-1]
+    return {"lat": fix.lat, "lon": fix.lon, "source": "modemmanager",
+            "note": f"GNSS-Fix {fix.ts.isoformat(timespec='seconds')}",
+            "hdop": fix.hdop}
 
 
 SOURCES = {"lasttrip": lambda: position_lasttrip(fahrtenbuch_db()),
