@@ -116,8 +116,13 @@ def resolve_soc(a, cfg: dict) -> tuple[float, str]:
     if st["written_ms"] is not None:
         age = time.time() - st["written_ms"] / 1000.0
         if age > MERCEDES_STALE_S:
-            print(f"chargeplanner: Mercedes-Status ist {int(age // 60)} min alt; SoC kann veraltet sein.",
-                  file=sys.stderr)
+            if a.soc is not None:
+                print(f"chargeplanner: Mercedes-Status ist {int(age // 60)} min alt; "
+                      f"SoC kann veraltet sein; nutze --soc {a.soc:g}.", file=sys.stderr)
+                return a.soc, "manual-fallback"
+            raise SystemExit(f"chargeplanner: Mercedes-Status ist {int(age // 60)} min alt; "
+                             f"SoC kann veraltet sein und ist nicht nutzbar. "
+                             f"Mit --soc PROZENT als Fallback starten.")
     return st["soc"], "mercedes"
 
 

@@ -93,10 +93,12 @@ expect_fail "Statusdatei nicht lesbar" python3 chargeplanner.py 48.0 9.0 --soc-s
 echo "ok - fehlende Statusdatei: klare Meldung, kein erfundener SoC"
 
 printf '{"state":"ok","soc_percent":60,"written_at_ms":%s}' "$((now - 7200000))" >"$tmp/old.json"
-python3 chargeplanner.py 48.0 9.0 --soc-source mercedes --mercedes-status-cache "$tmp/old.json" >"$tmp/o.json" 2>"$tmp/o.err"
-grep -q "alt" "$tmp/o.err" || { echo "not ok - veralteter Status braucht eine Warnung"; exit 1; }
-python3 -c "import json,sys; assert json.load(open(sys.argv[1]))['soc_pct']==60.0" "$tmp/o.json"
-echo "ok - veralteter Mercedes-Status: Warnung, Wert bleibt sichtbar"
+expect_fail "alt" python3 chargeplanner.py 48.0 9.0 --soc-source mercedes --mercedes-status-cache "$tmp/old.json" \
+  || { echo "not ok - veralteter Status ohne --soc muss abbrechen"; exit 1; }
+python3 chargeplanner.py 48.0 9.0 --soc-source mercedes --mercedes-status-cache "$tmp/old.json" --soc 35 >"$tmp/o.json" 2>"$tmp/o.err"
+grep -q "alt" "$tmp/o.err" || { echo "not ok - veralteter Status mit --soc braucht Hinweis"; exit 1; }
+python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d['soc_pct']==35.0 and d['soc_source']=='manual-fallback', d" "$tmp/o.json"
+echo "ok - veralteter Mercedes-Status (>30 min): ohne --soc Abbruch, mit --soc Fallback"
 
 printf 'SOC_SOURCE=mercedes\nMERCEDES_STATUS_CACHE=%s\n' "$st" >"$tmp/mc.conf"
 CHARGEPLANNER_CONFIG="$tmp/mc.conf" python3 chargeplanner.py 48.0 9.0 >"$tmp/c.json"
